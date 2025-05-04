@@ -1,0 +1,36 @@
+/* Full-page layout */
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fff;
+    color: #000;
+    font-size: 16;
+    font-family: sans-serif;
+  }
+
+table {
+    width: 95%;
+    font-size: 14px;
+    outline: none;
+    border: none;
+  }
+  
+  /* Editor box */
+  #pad {
+    width: 98%;
+    height: 95%;
+    padding: 1rem;
+    font-size: 16px;
+    box-sizing: border-box;
+    outline: none;
+    border: none;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+  }
+  
+  a {
+    color: blue;
+    text-decoration: underline;
+  }
+  

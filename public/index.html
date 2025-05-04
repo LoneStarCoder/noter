@@ -1,0 +1,132 @@
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Noter Home</title>
+  <link rel="stylesheet" href="/style.css">
+  <link id="theme-style" rel="stylesheet" href="/style.css">
+
+</head>
+<body>
+
+  <button id="theme-toggle" style="position:fixed;top:10px;right:10px;z-index:10;">🌙</button>
+  <table>
+    <tr>
+      <td><a href="/person/brody">Brody</a></td>
+      <td><a href="/person/elizabeth">Elizabeth</a></td>
+      <td><a href="/person/brennan">Brennan</a></td>
+      <td><a href="/person/christian">Christian</a></td>
+      <td>
+        <div >
+          <select id="page-select">
+            <option disabled selected>Loading...</option>
+          </select>
+          <button onclick="goToPage()" style="font-size: 14px;">Go</button>
+        </div>
+      </td>
+      
+    </tr>
+</tr>
+</table>
+  <!-- <textarea id="pad" placeholder="Home..."></textarea> -->
+  <div id="pad" contenteditable="true" spellcheck="false" >
+  </div>
+
+  <div id="new-page-bar">
+    <em><small>Create a new page here...</small></em>
+    <input id="new-page-name" type="text" placeholder="New page name..." />
+    <button onclick="createPage()">Create</button>
+  </div>
+
+
+  
+
+
+  <script>
+    const name = window.location.pathname.split('/').pop() || 'home';
+    const pad = document.getElementById('pad');
+  
+    function escapeHTML(text) {
+  const div = document.createElement('div');
+  div.innerText = text;
+  return div.innerHTML;
+}
+
+function linkifySafe(raw) {
+  const escaped = escapeHTML(raw);
+  const urlRegex = /(\b(?:https?:\/\/)?(?:www\.)?[a-z0-9\-]+\.[a-z]{2,}(?:[^\s]*)?)/gi;
+  return escaped.replace(urlRegex, (url) => {
+    let href = url;
+    if (!/^https?:\/\//i.test(url)) {
+      href = 'https://' + url;
+    }
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer">${url}</a>`;
+  });
+}
+
+
+  
+    function extractPlainText(el) {
+      return el.innerText || el.textContent || "";
+    }
+  
+    // Load and render
+    fetch(`/load/${name}`).then(res => res.text()).then(data => {
+      pad.innerHTML = linkifySafe(data);
+    });
+  
+    let saveTimer;
+    pad.addEventListener('input', () => {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        const plain = extractPlainText(pad);
+        fetch(`/save/${name}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: plain })
+        });
+      }, 500);
+    });
+
+    const themeBtn = document.getElementById('theme-toggle');
+    const themeStyle = document.getElementById('theme-style');
+
+    // Optional: persist theme
+    const currentTheme = localStorage.getItem('theme') || 'light';
+    themeStyle.href = currentTheme === 'dark' ? '/dark.css' : '/style.css';
+    themeBtn.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
+
+    themeBtn.addEventListener('click', () => {
+      const isDark = themeStyle.href.includes('dark.css');
+      themeStyle.href = isDark ? '/style.css' : '/dark.css';
+      localStorage.setItem('theme', isDark ? 'light' : 'dark');
+      themeBtn.textContent = isDark ? '🌙' : '☀️';
+    });
+
+// Fetch existing pages and populate dropdown
+fetch('/pages')
+  .then(res => res.json())
+  .then(pages => {
+    const select = document.getElementById('page-select');
+    select.innerHTML = '<option disabled selected>Select a page</option>';
+    pages.forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      select.appendChild(opt);
+    });
+  });
+
+function goToPage() {
+  const name = document.getElementById('page-select').value;
+  if (name) window.location.href = `/person/${name}`;
+}
+
+
+  </script>
+
+
+
+  
+</body>
+</html>
