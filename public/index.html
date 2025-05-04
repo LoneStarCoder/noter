@@ -6,34 +6,31 @@
   <link rel="stylesheet" href="/style.css">
   <link id="theme-style" rel="stylesheet" href="/style.css">
 
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+
 </head>
 <body>
 
-  <button id="theme-toggle" style="position:fixed;top:10px;right:10px;z-index:10;">🌙</button>
+  
   <table>
     <tr>
       <td><a href="/person/brody">Brody</a></td>
       <td><a href="/person/elizabeth">Elizabeth</a></td>
-      <td><a href="/person/brennan">Brennan</a></td>
-      <td><a href="/person/christian">Christian</a></td>
-      <td>
-        <div >
+      <td><div>
           <select id="page-select">
             <option disabled selected>Loading...</option>
-          </select>
-          <button onclick="goToPage()" style="font-size: 14px;">Go</button>
+          </select><button onclick="goToPage()">Go</button>
         </div>
       </td>
-      
+      <td><button id="theme-toggle" >🌙</button></td>
     </tr>
-</tr>
 </table>
   <!-- <textarea id="pad" placeholder="Home..."></textarea> -->
   <div id="pad" contenteditable="true" spellcheck="false" >
   </div>
-
+<HR>
   <div id="new-page-bar">
-    <em><small>Create a new page here...</small></em>
     <input id="new-page-name" type="text" placeholder="New page name..." />
     <button onclick="createPage()">Create</button>
   </div>
@@ -64,8 +61,6 @@ function linkifySafe(raw) {
   });
 }
 
-
-  
     function extractPlainText(el) {
       return el.innerText || el.textContent || "";
     }
@@ -126,6 +121,35 @@ function goToPage() {
   </script>
 
 
+<script>
+  function createPage() {
+    const name = document.getElementById('new-page-name').value.trim().toLowerCase();
+    if (!name || !/^[a-z0-9_\-]+$/.test(name)) {
+      alert('Invalid name. Use only letters, numbers, hyphens, or underscores.');
+      return;
+    }
+    window.location.href = `/person/${name}`;
+  }
+
+  function goToPage() {
+    const name = document.getElementById('page-select').value;
+    if (name) window.location.href = `/person/${name}`;
+  }
+
+  // Load page list
+  fetch('/pages')
+    .then(res => res.json())
+    .then(pages => {
+      const select = document.getElementById('page-select');
+      select.innerHTML = '<option disabled selected>Select a page</option>';
+      pages.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+      });
+    });
+</script>
 
   
 </body>
