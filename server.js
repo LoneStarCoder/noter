@@ -7,6 +7,8 @@ const protectedPages = JSON.parse(
   fs.existsSync('protected_pages.json') ? fs.readFileSync('protected_pages.json') : '{}'
 );
 
+const NOTES_DIR = path.join(__dirname, 'persistent');
+if (!fs.existsSync(NOTES_DIR)) fs.mkdirSync(NOTES_DIR, { recursive: true });
 
 app.use(express.json());
 app.use(express.static('public')); // Serves index.html and other assets
@@ -15,7 +17,7 @@ function getSafeName(name) {
   return name.replace(/[^a-z0-9_\-]/gi, '');
 }
 function getTextFile(name) {
-  return path.join(__dirname, `person_${getSafeName(name)}.txt`);
+  return path.join(NOTES_DIR, `person_${getSafeName(name)}.txt`);
 }
 
 // Serve dynamic person editor (e.g. /person/brody)
@@ -46,7 +48,7 @@ app.post('/save/:name', (req, res) => {
 });
 
 app.get('/pages', (req, res) => {
-    const files = fs.readdirSync(__dirname);
+    const files = fs.readdirSync(NOTES_DIR);
     const pages = files
       .filter(f => f.startsWith('person_') && f.endsWith('.txt'))
       .map(f => f.replace(/^person_/, '').replace(/\.txt$/, ''));
