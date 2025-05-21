@@ -110,7 +110,6 @@ To protect a page with a password, create a `protected_pages.json` file in the p
 ```
 
 - When accessing a protected page, users will be prompted for the password.
-- Passwords are stored in plain text (for demo purposes).
 
 ---
 
@@ -164,7 +163,7 @@ To ensure your notes and data are not lost on redeploy or restart, configure a p
 1. **Create a Persistent Disk**
    - In your Render dashboard, go to your web service settings.
    - Under the "Disks" section, click "Add Disk".
-   - Name the disk (e.g., `noter-data`), set the mount path to `/persistent`, and choose a size (e.g., 1GB or more).
+   - Name the disk (e.g., `noter-data`), set the mount path to `/opt/render/project/src/persistent`, and choose a size (e.g., 1GB or more).
 
 2. **Update Your Service**
    - Make sure your Render service uses the latest code (with all note files stored in `/persistent`).

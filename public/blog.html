@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blog</title>
+  <link rel="stylesheet" href="/style_blog.css">
+  <link rel="stylesheet" href="/dark.css" id="theme-style">
+  <style>
+    /* Only page-specific overrides or critical inline styles here if needed */
+  </style>
+</head>
+<body>
+  <header>
+    <nav>
+      <a href="/">🏠 Home</a>
+      <!--<a href="/blog.html">📝 Blog</a>-->
+    </nav>
+  </header>
+  <div class="blog-container">
+    <h1>Noter Blog Pages</h1>
+    <div class="blog-post">
+      <h2>Blog Entries on <i>this</i> Page.</h2>
+      <ul>
+        <li><h4><a href="/">Home page of this Website</a> - Except this one.</h4></li>
+        <li><h4><a href="#seed-oils">Seed Oils</a></h4></li>
+        <li><h4><a href="#html-formatting">HTML Formatting Reference</a></h4></li>
+      </ul>
+    </div>
+    <div class="blog-post">
+      <h2 id="seed-oils">Seed Oils</h2>
+      <h3>Research and References to the dangers or processed seed oils.</h3>
+
+      <div class="blog-meta">May 19, 2025</div>
+      <p>
+        🟢 Effect of a 6-month intervention with cooking oils containing a high concentration of monounsaturated fatty acids (olive and canola oils) compared with control oil in male Asian Indians with nonalcoholic fatty liver disease.
+        <a href="https://pubmed.ncbi.nlm.nih.gov/24625239">pubmed.ncbi.nlm.nih.gov/24625239</a><br>
+        🟢 Soybeans, corn and canola require hours of industrial processing (heat, pressure and solvents) to extract "oil".
+        <a href="https://www.lchf-rd.com/2018/03/07/a-new-hypothesis-for-obesity-part1">a-new-hypothesis-for-obesity-part1</a><br>
+        🟢Omega-6 fatty acids are pro-inflammatory and can lead to chronic diseases.
+        <a href="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7071230">www.ncbi.nlm.nih.gov/pmc/articles/PMC7071230</a>
+      </p>
+    </div>
+    <div class="blog-post">
+      <h2 id="html-formatting">HTML Formatting Reference</h2>
+      <div class="blog-meta">May 20, 2025</div>
+      <p>Use this post as a reference for formatting your blog entries in HTML. Below are examples of common elements you can use:</p>
+      <ul>
+        <li><strong>Links:</strong> <a href="https://www.example.com" target="_blank" rel="noopener">Visit Example.com</a></li>
+        <li><strong>Bold text:</strong> <strong>This is bold</strong></li>
+        <li><strong>Italic text:</strong> <em>This is italic</em></li>
+        <li><strong>Lists:</strong>
+          <ul>
+            <li>First item</li>
+            <li>Second item</li>
+          </ul>
+        </li>
+        <li><strong>Inline code:</strong> <code>const x = 42;</code></li>
+        <li><strong>Blockquote:</strong>
+          <blockquote style="margin:1em 0;padding:0.7em 1.2em;background:#f7fafc;border-left:4px solid #3182ce;color:#2d3748;">
+            This is a blockquote for highlighting important text.
+          </blockquote>
+        </li>
+        <li><strong>Code block (with language):</strong></li>
+      </ul>
+      <pre style="background:#23272e;color:#e2e8f0;padding:1em 1.2em;border-radius:8px;overflow-x:auto;font-size:1em;margin-bottom:1em;"><code class="language-javascript">// JavaScript example
+function greet(name) {
+  return `Hello, ${name}!`;
+}
+</code></pre>
+      <p>You can use <code>&lt;pre&gt;</code> and <code>&lt;code&gt;</code> tags for code blocks. Add a <code>class</code> like <code>language-javascript</code> for clarity or syntax highlighting (if you add a library).</p>
+      <p><strong>Headings:</strong></p>
+      <h3>Subheading (h3)</h3>
+      <h4>Sub-subheading (h4)</h4>
+      <p>Feel free to copy and modify these examples for your own posts!</p>
+    </div>
+    <!-- Add more blog-post divs here -->
+  </div>
+</body>
+</html>
