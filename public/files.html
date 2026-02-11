@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>File Manager - Noter</title>
+  <link rel="stylesheet" href="/style.css">
+  <link id="theme-style" rel="stylesheet" href="/style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    .file-container {
+      max-width: 800px;
+      margin: 20px auto;
+    }
+
+    .section {
+      margin: 20px 0;
+      padding: 20px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
+
+    .upload-area {
+      border: 2px dashed #999;
+      border-radius: 8px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .upload-area:hover {
+      border-color: #666;
+      background-color: rgba(0, 0, 0, 0.05);
+    }
+
+    .upload-area.dragover {
+      border-color: #0066cc;
+      background-color: rgba(0, 102, 204, 0.1);
+    }
+
+    #file-input {
+      display: none;
+    }
+
+    .file-list {
+      margin-top: 20px;
+    }
+
+    .file-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px;
+      margin: 8px 0;
+      background-color: #f5f5f5;
+      border-radius: 5px;
+      border-left: 4px solid #0066cc;
+    }
+
+    .file-info {
+      flex: 1;
+    }
+
+    .file-name {
+      font-weight: bold;
+      margin: 0;
+    }
+
+    .file-size {
+      font-size: 0.85em;
+      color: #666;
+      margin-top: 4px;
+    }
+
+    .file-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      padding: 8px 16px;
+      margin: 5px;
+      border: none;
+      border-radius: 4px;
+      background-color: #0066cc;
+      color: white;
+      cursor: pointer;
+      font-size: 0.9em;
+      transition: background-color 0.3s;
+    }
+
+    button:hover {
+      background-color: #0052a3;
+    }
+
+    .delete-btn {
+      background-color: #cc3333;
+    }
+
+    .delete-btn:hover {
+      background-color: #aa2222;
+    }
+
+    .status-message {
+      margin-top: 10px;
+      padding: 12px;
+      border-radius: 4px;
+      display: none;
+    }
+
+    .status-message.success {
+      background-color: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+      display: block;
+    }
+
+    .status-message.error {
+      background-color: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+      display: block;
+    }
+
+    .loading {
+      display: none;
+      text-align: center;
+      color: #666;
+    }
+
+    .loading.active {
+      display: block;
+    }
+
+    h2 {
+      margin-top: 0;
+    }
+
+    .back-link {
+      display: inline-block;
+      margin: 10px 0;
+      color: #0066cc;
+      text-decoration: none;
+      font-weight: bold;
+    }
+
+    .back-link:hover {
+      text-decoration: underline;
+    }
+
+    #password-input {
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 1em;
+      margin-right: 10px;
+      min-width: 200px;
+    }
+
+    #password-input:focus {
+      outline: none;
+      border-color: #0066cc;
+      box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.1);
+    }
+
+    #password-section button {
+      margin: 0;
+    }
+
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.5);
+      overflow: auto;
+    }
+
+    .modal.active {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-content {
+      background-color: white;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      width: 90%;
+      max-width: 900px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .modal-header {
+      padding: 15px;
+      border-bottom: 1px solid #ddd;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-header h2 {
+      margin: 0;
+      font-size: 1.2em;
+    }
+
+    .modal-close {
+      background-color: #999;
+      padding: 5px 12px;
+      font-size: 0.9em;
+    }
+
+    .modal-close:hover {
+      background-color: #777;
+    }
+
+    .modal-body {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .file-content {
+      background-color: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 15px;
+      font-family: monospace;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      max-height: 500px;
+      overflow-y: auto;
+      font-size: 0.9em;
+      line-height: 1.4;
+    }
+
+    .view-btn {
+      background-color: #28a745;
+    }
+
+    .view-btn:hover {
+      background-color: #218838;
+    }
+  </style>
+</head>
+<body>
+  <div class="file-container">
+    <a href="/" class="back-link">← Back to Home</a>
+    
+    <h1>File Manager</h1>
+
+    <!-- Password Section -->
+    <div id="password-section" class="section" style="display: none;">
+      <h2>Enter Password</h2>
+      <input type="password" id="password-input" placeholder="Enter password" />
+      <button onclick="submitPassword()">Submit</button>
+      <div id="password-status" class="status-message"></div>
+    </div>
+
+    <div id="main-content" style="display: none;">
+    <!-- Upload Section -->
+    <div class="section">
+      <h2>Upload Files</h2>
+      <div class="upload-area" id="upload-area">
+        <p>Click here or drag files to upload</p>
+        <input type="file" id="file-input" multiple />
+      </div>
+      <div id="upload-status" class="status-message"></div>
+      <div id="upload-loading" class="loading">Uploading...</div>
+    </div>
+
+    <!-- File List Section -->
+    <div class="section">
+      <h2>Your Files</h2>
+      <div id="download-loading" class="loading">Loading files...</div>
+      <div class="file-list" id="file-list">
+        <!-- Files will be populated here -->
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- View Modal -->
+  <div id="view-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="modal-filename"></h2>
+        <button class="modal-close" onclick="closeModal()">Close</button>
+      </div>
+      <div class="modal-body">
+        <div id="modal-body-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentPassword = '';
+    const passwordSection = document.getElementById('password-section');
+    const mainContent = document.getElementById('main-content');
+    const passwordInput = document.getElementById('password-input');
+    const passwordStatus = document.getElementById('password-status');
+
+    const uploadArea = document.getElementById('upload-area');
+    const fileInput = document.getElementById('file-input');
+    const uploadStatus = document.getElementById('upload-status');
+    const uploadLoading = document.getElementById('upload-loading');
+    const fileList = document.getElementById('file-list');
+    const downloadLoading = document.getElementById('download-loading');
+
+    // Check if files page requires password
+    function checkPasswordRequired() {
+      fetch('/list-files')
+        .then(res => {
+          if (res.status === 401) {
+            passwordSection.style.display = 'block';
+            mainContent.style.display = 'none';
+          } else {
+            mainContent.style.display = 'block';
+            passwordSection.style.display = 'none';
+            loadFiles();
+          }
+        })
+        .catch(() => {
+          mainContent.style.display = 'block';
+          passwordSection.style.display = 'none';
+          loadFiles();
+        });
+    }
+
+    function submitPassword() {
+      const password = passwordInput.value;
+      if (!password) {
+        passwordStatus.textContent = 'Please enter a password';
+        passwordStatus.classList.remove('success', 'error');
+        passwordStatus.classList.add('error');
+        return;
+      }
+
+      fetch(`/list-files?password=${encodeURIComponent(password)}`)
+        .then(res => {
+          if (res.status === 401) {
+            passwordStatus.textContent = 'Incorrect password';
+            passwordStatus.classList.remove('success', 'error');
+            passwordStatus.classList.add('error');
+          } else {
+            currentPassword = password;
+            passwordSection.style.display = 'none';
+            mainContent.style.display = 'block';
+            passwordInput.value = '';
+            loadFiles();
+          }
+        })
+        .catch(err => {
+          passwordStatus.textContent = 'Error checking password';
+          passwordStatus.classList.remove('success', 'error');
+          passwordStatus.classList.add('error');
+        });
+    }
+
+    passwordInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') submitPassword();
+    });
+
+    // Drag and drop
+    uploadArea.addEventListener('click', () => fileInput.click());
+    uploadArea.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadArea.classList.add('dragover');
+    });
+    uploadArea.addEventListener('dragleave', () => {
+      uploadArea.classList.remove('dragover');
+    });
+    uploadArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadArea.classList.remove('dragover');
+      handleFiles(e.dataTransfer.files);
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      handleFiles(e.target.files);
+    });
+
+    function showStatus(message, isError = false) {
+      uploadStatus.textContent = message;
+      uploadStatus.classList.remove('success', 'error');
+      uploadStatus.classList.add(isError ? 'error' : 'success');
+    }
+
+    function handleFiles(files) {
+      if (files.length === 0) return;
+
+      uploadLoading.classList.add('active');
+      uploadStatus.classList.remove('success', 'error');
+
+      const formData = new FormData();
+      for (let file of files) {
+        formData.append('files', file);
+      }
+      if (currentPassword) {
+        formData.append('password', currentPassword);
+      }
+
+      const url = currentPassword ? `/upload?password=${encodeURIComponent(currentPassword)}` : '/upload';
+      fetch(url, {
+        method: 'POST',
+        body: formData
+      })
+        .then(res => res.json())
+        .then(data => {
+          uploadLoading.classList.remove('active');
+          if (data.success) {
+            showStatus(`Successfully uploaded ${data.count} file(s)`);
+            fileInput.value = '';
+            loadFiles();
+          } else {
+            showStatus(data.message || 'Upload failed', true);
+          }
+        })
+        .catch(err => {
+          uploadLoading.classList.remove('active');
+          showStatus('Upload failed: ' + err.message, true);
+        });
+    }
+
+    function loadFiles() {
+      downloadLoading.classList.add('active');
+      fileList.innerHTML = '';
+
+      const url = currentPassword ? `/list-files?password=${encodeURIComponent(currentPassword)}` : '/list-files';
+      fetch(url)
+        .then(res => res.json())
+        .then(files => {
+          downloadLoading.classList.remove('active');
+          if (files.length === 0) {
+            fileList.innerHTML = '<p style="color: #666; text-align: center;">No files uploaded yet</p>';
+            return;
+          }
+
+          files.forEach(file => {
+            const item = document.createElement('div');
+            item.className = 'file-item';
+            item.innerHTML = `
+              <div class="file-info">
+                <p class="file-name">${escapeHTML(file.name)}</p>
+                <p class="file-size">${formatSize(file.size)}</p>
+              </div>
+              <div class="file-actions">
+                <button class="view-btn" onclick="viewFile('${escapeHTML(file.name, true)}')">View</button>
+                <button onclick="downloadFile('${escapeHTML(file.name, true)}')">Download</button>
+                <button class="delete-btn" onclick="deleteFile('${escapeHTML(file.name, true)}')">Delete</button>
+              </div>
+            `;
+            fileList.appendChild(item);
+          });
+        })
+        .catch(err => {
+          downloadLoading.classList.remove('active');
+          fileList.innerHTML = '<p style="color: red;">Failed to load files</p>';
+        });
+    }
+
+    function downloadFile(filename) {
+      const link = document.createElement('a');
+      const url = currentPassword ? `/download/${encodeURIComponent(filename)}?password=${encodeURIComponent(currentPassword)}` : `/download/${encodeURIComponent(filename)}`;
+      link.href = url;
+      link.download = filename;
+      link.click();
+    }
+
+    function deleteFile(filename) {
+      if (!confirm(`Delete "${filename}"?`)) return;
+
+      const url = currentPassword ? `/delete-file/${encodeURIComponent(filename)}?password=${encodeURIComponent(currentPassword)}` : `/delete-file/${encodeURIComponent(filename)}`;
+      fetch(url, {
+        method: 'DELETE'
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            loadFiles();
+          } else {
+            alert('Delete failed: ' + (data.message || 'Unknown error'));
+          }
+        })
+        .catch(err => alert('Delete failed: ' + err.message));
+    }
+
+    function viewFile(filename) {
+      const url = currentPassword ? `/view/${encodeURIComponent(filename)}?password=${encodeURIComponent(currentPassword)}` : `/view/${encodeURIComponent(filename)}`;
+      fetch(url)
+        .then(res => res.json())
+        .then(data => {
+          const modal = document.getElementById('view-modal');
+          const modalFilename = document.getElementById('modal-filename');
+          const modalBodyContent = document.getElementById('modal-body-content');
+          
+          modalFilename.textContent = filename;
+          
+          if (data.isText && data.content) {
+            modalBodyContent.innerHTML = `<div class="file-content">${escapeHTML(data.content)}</div>`;
+          } else {
+            const fileExtension = filename.split('.').pop().toLowerCase();
+            if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(fileExtension)) {
+              const imgUrl = currentPassword ? `/download/${encodeURIComponent(filename)}?password=${encodeURIComponent(currentPassword)}` : `/download/${encodeURIComponent(filename)}`;
+              modalBodyContent.innerHTML = `<img src="${imgUrl}" style="max-width: 100%; max-height: 500px;">`;
+            } else {
+              const dlUrl = currentPassword ? `/download/${encodeURIComponent(filename)}?password=${encodeURIComponent(currentPassword)}` : `/download/${encodeURIComponent(filename)}`;
+              modalBodyContent.innerHTML = `<p>This file cannot be previewed. <a href="${dlUrl}" download="${filename}">Download it instead</a></p>`;
+            }
+          }
+          
+          modal.classList.add('active');
+        })
+        .catch(err => alert('Failed to view file: ' + err.message));
+    }
+
+    function closeModal() {
+      const modal = document.getElementById('view-modal');
+      modal.classList.remove('active');
+    }
+
+    // Close modal when clicking outside the content
+    window.addEventListener('click', (event) => {
+      const modal = document.getElementById('view-modal');
+      if (event.target === modal) {
+        closeModal();
+      }
+    });
+
+    function formatSize(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    }
+
+    function escapeHTML(str, forAttribute = false) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return forAttribute ? str.replace(/"/g, '&quot;') : div.innerHTML;
+    }
+
+    // Check password on page load
+    checkPasswordRequired();
+
+    // Theme toggle (copied from index.html)
+    const themeBtn = document.getElementById('theme-toggle');
+    const themeStyle = document.getElementById('theme-style');
+
+    if (!themeBtn) {
+      // Create theme toggle if needed
+      const btn = document.createElement('button');
+      btn.id = 'theme-toggle';
+      btn.textContent = '🌙';
+      btn.style.position = 'fixed';
+      btn.style.top = '10px';
+      btn.style.right = '10px';
+      document.body.appendChild(btn);
+    }
+
+    function toggleTheme() {
+      const isDark = themeStyle.href.includes('dark');
+      themeStyle.href = isDark ? '/style.css' : '/dark.css';
+      localStorage.setItem('theme', isDark ? 'light' : 'dark');
+    }
+
+    function loadTheme() {
+      const savedTheme = localStorage.getItem('theme');
+      if (savedTheme === 'dark') {
+        themeStyle.href = '/dark.css';
+      }
+    }
+
+    if (themeBtn) {
+      themeBtn.addEventListener('click', toggleTheme);
+      loadTheme();
+    }
+  </script>
+</body>
+</html>
