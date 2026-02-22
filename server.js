@@ -13,10 +13,27 @@ const UPLOADS_DIR = path.join(__dirname, 'persistent', 'uploads');
 if (!fs.existsSync(NOTES_DIR)) fs.mkdirSync(NOTES_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
+// Returns a safe absolute path within UPLOADS_DIR, or null on path traversal attempt
+function getSafeUploadPath(folder, filename) {
+  const rel = path.join(folder || '', filename || '');
+  const normalized = path.normalize(rel);
+  if (normalized.startsWith('..') || path.isAbsolute(normalized)) return null;
+  const full = path.join(UPLOADS_DIR, normalized);
+  if (full !== UPLOADS_DIR && !full.startsWith(UPLOADS_DIR + path.sep)) return null;
+  return full;
+}
+
+function sanitizeFolderName(name) {
+  return (name || '').replace(/[^a-z0-9_\-]/gi, '');
+}
+
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, UPLOADS_DIR);
+    const dest = getSafeUploadPath(req.query.folder || '', '');
+    if (!dest) return cb(new Error('Invalid folder path'));
+    if (!fs.existsSync(dest)) return cb(new Error('Folder does not exist'));
+    cb(null, dest);
   },
   filename: (req, file, cb) => {
     cb(null, file.originalname);
@@ -103,27 +120,41 @@ app.post('/upload', checkFilePassword, upload.array('files'), (req, res) => {
 });
 
 app.get('/list-files', checkFilePassword, (req, res) => {
+  const dirPath = getSafeUploadPath(req.query.folder || '', '');
+  if (!dirPath) return res.status(400).json([]);
   try {
-    const files = fs.readdirSync(UPLOADS_DIR);
-    const fileList = files.map(filename => {
-      const filepath = path.join(UPLOADS_DIR, filename);
-      const stats = fs.statSync(filepath);
-      return {
-        name: filename,
-        size: stats.size
-      };
+    const items = fs.readdirSync(dirPath);
+    const result = items.map(name => {
+      const fp = path.join(dirPath, name);
+      const stats = fs.statSync(fp);
+      const isDirectory = stats.isDirectory();
+      return { name, size: isDirectory ? null : stats.size, isDirectory };
     });
-    res.json(fileList);
+    res.json(result);
   } catch (err) {
     res.json([]);
   }
 });
 
+app.post('/create-folder', checkFilePassword, (req, res) => {
+  const folderName = sanitizeFolderName(req.body.name);
+  if (!folderName) return res.json({ success: false, message: 'Invalid folder name' });
+  const folderPath = getSafeUploadPath(req.body.parent || '', folderName);
+  if (!folderPath) return res.json({ success: false, message: 'Invalid path' });
+  if (fs.existsSync(folderPath)) return res.json({ success: false, message: 'Folder already exists' });
+  try {
+    fs.mkdirSync(folderPath);
+    res.json({ success: true });
+  } catch (err) {
+    res.json({ success: false, message: 'Failed to create folder' });
+  }
+});
+
 app.get('/download/:filename', checkFilePassword, (req, res) => {
   const filename = path.basename(req.params.filename);
-  const filepath = path.join(UPLOADS_DIR, filename);
+  const filepath = getSafeUploadPath(req.query.folder || '', filename);
   
-  if (!fs.existsSync(filepath)) {
+  if (!filepath || !fs.existsSync(filepath) || fs.statSync(filepath).isDirectory()) {
     return res.status(404).send('File not found');
   }
   
@@ -132,9 +163,9 @@ app.get('/download/:filename', checkFilePassword, (req, res) => {
 
 app.get('/view/:filename', checkFilePassword, (req, res) => {
   const filename = path.basename(req.params.filename);
-  const filepath = path.join(UPLOADS_DIR, filename);
+  const filepath = getSafeUploadPath(req.query.folder || '', filename);
   
-  if (!fs.existsSync(filepath)) {
+  if (!filepath || !fs.existsSync(filepath) || fs.statSync(filepath).isDirectory()) {
     return res.status(404).json({ success: false, message: 'File not found' });
   }
   
@@ -155,9 +186,9 @@ app.get('/view/:filename', checkFilePassword, (req, res) => {
 
 app.delete('/delete-file/:filename', checkFilePassword, (req, res) => {
   const filename = path.basename(req.params.filename);
-  const filepath = path.join(UPLOADS_DIR, filename);
+  const filepath = getSafeUploadPath(req.query.folder || '', filename);
   
-  if (!fs.existsSync(filepath)) {
+  if (!filepath || !fs.existsSync(filepath) || fs.statSync(filepath).isDirectory()) {
     return res.json({ success: false, message: 'File not found' });
   }
   
@@ -166,6 +197,20 @@ app.delete('/delete-file/:filename', checkFilePassword, (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.json({ success: false, message: 'Failed to delete file' });
+  }
+});
+
+app.delete('/delete-folder/:foldername', checkFilePassword, (req, res) => {
+  const foldername = sanitizeFolderName(req.params.foldername);
+  const folderPath = getSafeUploadPath(req.query.parent || '', foldername);
+  if (!folderPath || folderPath === UPLOADS_DIR || !fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+    return res.json({ success: false, message: 'Folder not found' });
+  }
+  try {
+    fs.rmSync(folderPath, { recursive: true });
+    res.json({ success: true });
+  } catch (err) {
+    res.json({ success: false, message: 'Failed to delete folder' });
   }
 });
   
