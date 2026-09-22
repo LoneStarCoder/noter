@@ -1,4 +1,4 @@
-import { get } from '../lib/api.js';
+import { get, post } from '../lib/api.js';
 import { el, icon, toast, confirmDialog, downloadText } from '../lib/ui.js';
 import { identity } from '../lib/identity.js';
 import { PageView } from './page.js';
@@ -10,7 +10,7 @@ import {
 
 const $ = id => document.getElementById(id);
 const app = $('app');
-let session = { admin: false, adminConfigured: false, files: false, filesConfigured: false, unlocked: [] };
+let session = { user: null, admin: false, adminConfigured: false, files: false, filesConfigured: false, unlocked: [] };
 
 // Old versions kept page passwords in browser storage in plain text; remove them
 try {
@@ -41,11 +41,26 @@ const page = new PageView({
   onNavigate: (name, opts) => navigate(name, opts)
 });
 
+// Returns 'ok', 'offline' or 'signed-out'
 async function loadSession() {
   try {
     session = await get('/api/session');
+    if (session.user) identity.name = session.user.name;
+    return session.user ? 'ok' : 'signed-out';
   } catch (err) {
-    // keep defaults
+    return err instanceof TypeError ? 'offline' : 'signed-out';
+  }
+}
+
+async function signOut() {
+  await page.flush();
+  page.disconnect();
+  try {
+    await post('/api/auth/logout');
+  } finally {
+    // Nothing from this account should stay readable on the device
+    if (window.caches) await caches.delete('noter-api').catch(() => {});
+    window.location.replace('/login');
   }
 }
 
@@ -159,7 +174,8 @@ $('settings-btn').addEventListener('click', () => showSettings(session, {
     await loadSession();
     if (page.name) page.open(page.name);
     return session;
-  }
+  },
+  onSignOut: signOut
 }));
 $('nav-btn').addEventListener('click', () => app.classList.toggle('nav-open'));
 $('scrim').addEventListener('click', () => app.classList.remove('nav-open'));
@@ -268,15 +284,13 @@ setInterval(() => {
   const name = nameFromPath(window.location.pathname);
   sidebar.setCurrent(name);
   history.replaceState({ name }, '', window.location.href);
-  await loadSession();
+  // Offline, carry on with what this device has cached (the server still
+  // checks the sign-in on every request once we're back online)
+  const state = await loadSession();
+  if (state === 'signed-out') return; // the API call above sent us to the sign-in page
   sidebar.refresh();
   await page.open(name);
   if (new URLSearchParams(window.location.search).has('search')) showSwitcher(sidebar, navigate);
-  if (identity.isGuestName) {
-    toast(`You appear to others as “${identity.name}”.`, {
-      action: { label: 'Set your name', onClick: () => $('settings-btn').click() }
-    });
-  }
 })();
 
 if ('serviceWorker' in navigator) {

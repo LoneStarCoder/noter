@@ -33,8 +33,15 @@ export async function api(method, url, body, options = {}) {
   } catch (err) {
     data = { message: text };
   }
+  if (res.status === 401 && data && data.signIn && !options.noRedirect) goToSignIn();
   if (!res.ok) throw new ApiError(res.status, data);
   return data;
+}
+
+// Sends the browser to the sign-in page, coming back here afterwards
+export function goToSignIn() {
+  const here = window.location.pathname + window.location.search;
+  window.location.assign(`/login?next=${encodeURIComponent(here)}`);
 }
 
 export const get = url => api('GET', url);

@@ -4,19 +4,50 @@ const path = require('path');
 const http = require('http');
 const { createApp } = require('../server');
 
-// Starts an app on a random port with a throwaway data dir
+const ROOT = { username: 'root', name: 'Root', password: 'root-password', admin: true };
+const MEMBER_PASSWORD = 'member-password';
+
+// Starts an app on a random port with a throwaway data dir and one admin
+// account ("root"). Pass users: [] to start with no accounts (setup mode).
 async function startServer(options = {}) {
   const dataDir = options.dataDir || fs.mkdtempSync(path.join(os.tmpdir(), 'noter-test-'));
-  const app = createApp({ dataDir, secret: 'test-secret', ...options });
+  const app = createApp({ dataDir, secret: 'test-secret', users: [ROOT], ...options });
   const server = await new Promise(resolve => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
   const base = `http://127.0.0.1:${server.address().port}`;
+  let root;
+  let counter = 0;
+  async function rootClient() {
+    if (!root) {
+      root = new Client(base, '');
+      const res = await root.post('/api/auth/login', { username: ROOT.username, password: ROOT.password });
+      if (res.status !== 200) throw new Error(`root login failed: ${res.status}`);
+    }
+    return root;
+  }
   return {
     base,
     dataDir,
     server,
-    client: (name) => new Client(base, name),
+    // A signed-in member. The account (display name = `name`) is created on
+    // first use through the admin API.
+    client(name) {
+      const client = new Client(base, '');
+      const username = `u${++counter}-${String(name || 'member').toLowerCase().replace(/[^a-z0-9]/g, '')}`.slice(0, 32);
+      client.username = username;
+      client.setup = async (c) => {
+        const admin = await rootClient();
+        const created = await admin.post('/api/users', { username, name: name || username, password: MEMBER_PASSWORD });
+        if (created.status !== 200) throw new Error(`could not create ${username}: ${JSON.stringify(created.data)}`);
+        const login = await c.post('/api/auth/login', { username, password: MEMBER_PASSWORD });
+        if (login.status !== 200) throw new Error(`login failed for ${username}`);
+      };
+      return client;
+    },
+    // Not signed in at all
+    anon: () => new Client(base, ''),
+    admin: rootClient,
     close() {
       server.closeAllConnections();
       server.close();
@@ -34,6 +65,11 @@ class Client {
   }
 
   async request(method, url, { json, body, headers = {}, raw = false } = {}) {
+    if (this.setup) {
+      const setup = this.setup;
+      this.setup = null;
+      await setup(this);
+    }
     const h = { 'X-Noter': '1', ...headers };
     if (this.user) h['X-Noter-User'] = encodeURIComponent(this.user);
     if (this.cookie) h.Cookie = this.cookie;
@@ -114,4 +150,4 @@ function readZip(buffer) {
   return files;
 }
 
-module.exports = { startServer, Client, rawGet, readZip };
+module.exports = { startServer, Client, rawGet, readZip, ROOT, MEMBER_PASSWORD };

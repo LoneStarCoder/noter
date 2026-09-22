@@ -32,11 +32,14 @@ anything else, edited together in real time, with history so nothing is ever los
 - Sidebar of every page, newest first, with title, preview, who edited it and when
 - Filter by name or `#tag`; Ctrl+K searches the text of every page you can open
 
-**Privacy**
-- Private pages (password). Make a new page private when you create it; the admin
-  can lock or unlock any page. Unlocked pages stay unlocked on that device for 30 days.
-- Read-only share links for a single page (revocable), even for private pages
-- Password-protected shared file manager
+**Accounts and privacy**
+- The whole site is behind sign-in: everyone has their own username and password
+- Admins add, remove and reset people from Settings → People; removing someone or
+  resetting their password signs them out everywhere at once
+- Private pages (extra password) on top of sign-in. Make a new page private when
+  you create it; admins can lock or unlock any page.
+- Read-only share links for a single page (revocable) work without an account
+- Shared file manager for everyone who is signed in
 
 **Everywhere**
 - Works on phones; installable as an app (Add to Home Screen)
@@ -105,41 +108,54 @@ npm run test:e2e   # browser test (needs Playwright, see test/e2e/app.e2e.js)
 
 ---
 
-## Passwords and privacy
+## Accounts
 
-`protected_pages.json` holds page passwords plus two special keys:
+Everything except the sign-in page and share links requires signing in.
+
+**First run.** When Noter starts with no accounts it prints a one-time setup code
+in the server log:
+
+```
+Noter setup: no accounts yet. Open /login and create the first (admin) account with setup code 1A2B3-C4D5E
+```
+
+(On Render: the service's **Logs** tab.) Open the site, enter the code and create
+your account; it becomes the admin. If `protected_pages.json` has an `"admin"`
+password, that also works as the setup code.
+
+**Adding people.** Settings → People → Add person. Noter suggests a temporary
+password and copies the sign-in details so you can send them. People can change
+their own name and password in Settings.
+
+**Taking access away.** Remove the person, or reset their password; either signs
+them out on every device immediately. Anyone can also use Settings → "Sign out
+everywhere else" for their own account.
+
+Details:
+- Passwords are stored as scrypt hashes in `.noter/users.json` (at least 8 characters).
+- Sign-in lasts 30 days per device, in a signed HttpOnly cookie. After 10 wrong
+  passwords from one IP in 15 minutes, further attempts are refused for a while.
+- There is always at least one admin; you can't remove yourself.
+
+## Private pages
+
+`protected_pages.json` can still give individual pages an extra password (people
+must be signed in *and* know the page password):
 
 ```json
 {
-  "admin": "admin-password",
-  "files": "file-manager-password",
   "brody": "yourpassword"
 }
 ```
 
-- **`admin`**: unlocks every page, lets you lock/unlock existing pages, empty the
-  trash, change the files password and download backups (Settings → Admin).
-- **`files`**: the shared file manager is disabled until this is set.
-- **page names**: private pages. People can also make pages private from the app.
-
-The file is looked up in this order: `$NOTER_PASSWORDS_FILE`, the data directory
-(`persistent/protected_pages.json`, use this on a host with a persistent disk),
-then the project root. It is gitignored. Edits to it take effect within a few
-seconds, no restart needed. If it contains invalid JSON at startup the server
-refuses to start.
-
-Passwords set through the app are stored as scrypt hashes; passwords you type into
-the file by hand can be plain text. Changing a password signs everyone else out of
-that page.
-
-Rules that keep a shared notebook safe from lock-outs:
-- Anyone can make a **new or empty** page private.
-- Only the **admin** can make an existing shared page with content private.
+- Anyone can make a **new or empty** page private; only admins can lock an existing
+  shared page (so nobody gets locked out of a page they use).
 - Anyone with a private page's password can change or remove it.
-- Pages without a password are public: anyone who can reach the site can read and edit them.
-
-Sign-in is a signed, HttpOnly, SameSite=Strict cookie; after 10 wrong passwords
-from one IP in 15 minutes further attempts are refused for a while.
+- The file is looked up in `$NOTER_PASSWORDS_FILE`, then the data directory
+  (`persistent/protected_pages.json`), then the project root. Edits take effect
+  within a few seconds.
+- The `"files"` key is no longer needed: the file manager is open to everyone who
+  is signed in.
 
 ---
 
@@ -151,7 +167,8 @@ Everything lives in the data directory (`persistent/` by default):
 person_<name>.txt          the notes (plain text / Markdown, unchanged format)
 attachments/<name>/        files attached to a page
 uploads/                   the shared file manager
-protected_pages.json       passwords
+protected_pages.json       private page passwords
+.noter/users.json          accounts (hashed passwords)
 .noter/meta/               who edited each page and when
 .noter/history/            earlier versions of pages
 .noter/trash/              deleted pages (kept 30 days)
@@ -175,6 +192,14 @@ Brody Kilpatrick
 ---
 
 # Release Notes
+
+## v2.1.0
+
+- Individual accounts: the whole site now requires signing in. First run shows a
+  setup screen that needs the one-time code from the server log.
+- Settings → People for admins: add, remove, reset passwords, make admins.
+- Names on edits, history and presence come from accounts.
+- The file manager no longer has its own password; everyone signed in can use it.
 
 ## v2.0.0
 
