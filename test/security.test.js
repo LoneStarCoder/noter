@@ -128,6 +128,18 @@ test('anyone can make a new page private, but only admin can lock an existing pa
   assert.strictEqual((await c.get('/api/pages/shared')).status, 200);
 });
 
+test('page responses say how you got in: public, password or admin', async () => {
+  const member = srv.client();
+  await member.save('open-page', 'hi');
+  assert.strictEqual((await member.get('/api/pages/open-page')).data.access, 'public');
+  await member.unlock('page', 'pagepw', 'secret');
+  const unlocked = (await member.get('/api/pages/secret')).data;
+  assert.strictEqual(unlocked.protected, true);
+  assert.strictEqual(unlocked.access, 'password');
+  const admin = await srv.admin();
+  assert.strictEqual((await admin.get('/api/pages/secret')).data.access, 'admin');
+});
+
 test('admin can read every page; reserved names cannot be pages', async () => {
   const admin = srv.client();
   await admin.unlock('admin', 'adminpw');

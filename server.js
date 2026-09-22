@@ -389,6 +389,9 @@ function createApp(options = {}) {
       updatedBy: page.updatedBy,
       exists: page.exists,
       protected: isProt,
+      // How you get in: 'public', 'password' (unlocked on this device) or
+      // 'admin' (admins can open private pages without the password)
+      access: !isProt ? 'public' : (session(req).p[req.pageName] === fingerprint(req.pageName) ? 'password' : 'admin'),
       viewers: live.presence(req.pageName)
     });
   });

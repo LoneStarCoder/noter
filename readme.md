@@ -136,7 +136,10 @@ so that nobody who finds the site before you can make themselves admin. (If
   Ctrl+K and type its name, or go to `/person/<name>`.
 - Anyone can make a **new or empty** page private. Only admins can lock an existing
   shared page, so nobody gets locked out of a page they already use.
-- Admins can open every page without its password.
+- Private pages show a 🔒 icon and a **Private** label. Admins can open every page
+  without its password; the label then reads *Private · open to you as admin*.
+  Locking a page therefore doesn't hide it from you if you're an admin. To see what
+  others see, use a non-admin account or a private browser window.
 
 ### Writing cheat sheet
 
