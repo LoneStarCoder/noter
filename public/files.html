@@ -1,354 +1,76 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>File Manager - Noter</title>
-  <link rel="stylesheet" href="/style.css">
-  <link id="theme-style" rel="stylesheet" href="/style.css">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Files · Noter</title>
+  <meta name="theme-color" content="#2f5fd0">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/js/theme-init.js"></script>
   <style>
-    .file-container {
-      max-width: 800px;
-      margin: 20px auto;
+    .files-page { max-width: 880px; margin: 0 auto; padding: 20px 16px 80px; }
+    .files-top { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+    .files-top h1 { flex: 1; margin: 0; font-size: 1.4rem; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+    .drop-zone {
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+      padding: 28px; border: 2px dashed var(--border); border-radius: 12px; color: var(--muted); cursor: pointer; text-align: center;
     }
-
-    .section {
-      margin: 20px 0;
-      padding: 20px;
-      border: 1px solid #ddd;
-      border-radius: 5px;
-    }
-
-    .upload-area {
-      border: 2px dashed #999;
-      border-radius: 8px;
-      padding: 40px;
-      text-align: center;
-      cursor: pointer;
-      transition: all 0.3s;
-    }
-
-    .upload-area:hover {
-      border-color: #666;
-      background-color: rgba(0, 0, 0, 0.05);
-    }
-
-    .upload-area.dragover {
-      border-color: #0066cc;
-      background-color: rgba(0, 102, 204, 0.1);
-    }
-
-    #file-input {
-      display: none;
-    }
-
-    .file-list {
-      margin-top: 20px;
-    }
-
-    .file-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 12px;
-      margin: 8px 0;
-      background-color: #f5f5f5;
-      border-radius: 5px;
-      border-left: 4px solid #0066cc;
-    }
-
-    .file-info {
-      flex: 1;
-    }
-
-    .file-name {
-      font-weight: bold;
-      margin: 0;
-    }
-
-    .file-size {
-      font-size: 0.85em;
-      color: #666;
-      margin-top: 4px;
-    }
-
-    .file-actions {
-      display: flex;
-      gap: 10px;
-    }
-
-    button {
-      padding: 8px 16px;
-      margin: 5px;
-      border: none;
-      border-radius: 4px;
-      background-color: #0066cc;
-      color: white;
-      cursor: pointer;
-      font-size: 0.9em;
-      transition: background-color 0.3s;
-    }
-
-    button:hover {
-      background-color: #0052a3;
-    }
-
-    .delete-btn {
-      background-color: #cc3333;
-    }
-
-    .delete-btn:hover {
-      background-color: #aa2222;
-    }
-
-    .status-message {
-      margin-top: 10px;
-      padding: 12px;
-      border-radius: 4px;
-      display: none;
-    }
-
-    .status-message.success {
-      background-color: #d4edda;
-      color: #155724;
-      border: 1px solid #c3e6cb;
-      display: block;
-    }
-
-    .status-message.error {
-      background-color: #f8d7da;
-      color: #721c24;
-      border: 1px solid #f5c6cb;
-      display: block;
-    }
-
-    .loading {
-      display: none;
-      text-align: center;
-      color: #666;
-    }
-
-    .loading.active {
-      display: block;
-    }
-
-    h2 {
-      margin-top: 0;
-    }
-
-    .back-link {
-      display: inline-block;
-      margin: 10px 0;
-      color: #0066cc;
-      text-decoration: none;
-      font-weight: bold;
-    }
-
-    .back-link:hover {
-      text-decoration: underline;
-    }
-
-    #password-input {
-      padding: 10px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 1em;
-      margin-right: 10px;
-      min-width: 200px;
-    }
-
-    #password-input:focus {
-      outline: none;
-      border-color: #0066cc;
-      box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.1);
-    }
-
-    #password-section button {
-      margin: 0;
-    }
-
-    .modal {
-      display: none;
-      position: fixed;
-      z-index: 1000;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      background-color: rgba(0, 0, 0, 0.5);
-      overflow: auto;
-    }
-
-    .modal.active {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .modal-content {
-      background-color: white;
-      border-radius: 8px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-      width: 90%;
-      max-width: 900px;
-      max-height: 80vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    .modal-header {
-      padding: 15px;
-      border-bottom: 1px solid #ddd;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .modal-header h2 {
-      margin: 0;
-      font-size: 1.2em;
-    }
-
-    .modal-close {
-      background-color: #999;
-      padding: 5px 12px;
-      font-size: 0.9em;
-    }
-
-    .modal-close:hover {
-      background-color: #777;
-    }
-
-    .modal-body {
-      padding: 20px;
-      overflow-y: auto;
-      flex: 1;
-    }
-
-    .file-content {
-      background-color: #f5f5f5;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      padding: 15px;
-      font-family: monospace;
-      white-space: pre-wrap;
-      word-wrap: break-word;
-      max-height: 500px;
-      overflow-y: auto;
-      font-size: 0.9em;
-      line-height: 1.4;
-    }
-
-    .view-btn {
-      background-color: #28a745;
-    }
-
-    .view-btn:hover {
-      background-color: #218838;
-    }
-
-    .folder-item {
-      border-left-color: #ff9900;
-    }
-
-    #breadcrumb {
-      margin-bottom: 12px;
-      font-size: 0.9em;
-      color: #666;
-    }
-
-    #breadcrumb a {
-      color: #0066cc;
-      text-decoration: none;
-    }
-
-    #breadcrumb a:hover {
-      text-decoration: underline;
-    }
-
-    .create-folder-bar {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 15px;
-    }
-
-    .create-folder-bar input {
-      padding: 8px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 0.9em;
-      flex: 1;
-      max-width: 250px;
-    }
-
-    .create-folder-btn {
-      background-color: #ff9900;
-      margin: 0;
-    }
-
-    .create-folder-btn:hover {
-      background-color: #cc7a00;
-    }
+    .drop-zone:hover, .drop-zone.dragover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    .toolbar .input { max-width: 240px; }
+    .crumbs { flex: 1; font-size: 0.92rem; color: var(--muted); }
+    .crumbs a { text-decoration: none; }
+    .file-row .icon { width: 20px; height: 20px; color: var(--muted); flex: none; }
+    .file-row .actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .file-row.folder .primary-line { cursor: pointer; }
+    .preview-text { white-space: pre-wrap; font-family: var(--mono); font-size: 0.85rem; background: var(--code-bg); padding: 12px; border-radius: 10px; max-height: 60vh; overflow: auto; margin: 0; }
+    .preview-img { max-width: 100%; max-height: 65vh; display: block; margin: 0 auto; border-radius: 8px; }
+    @media (max-width: 600px) { .file-row { flex-wrap: wrap; } .file-row .actions { width: 100%; justify-content: flex-start; } }
   </style>
 </head>
 <body>
-  <div class="file-container">
-    <a href="/" class="back-link">← Back to Home</a>
-    <button id="theme-toggle" style="position:fixed;top:10px;right:10px;z-index:10;">🌙</button>
-    
-    <h1>File Manager</h1>
-
-    <!-- Password Section -->
-    <div id="password-section" class="section" style="display: none;">
-      <h2>Enter Password</h2>
-      <input type="password" id="password-input" placeholder="Enter password" />
-      <button id="password-submit">Submit</button>
-      <div id="password-status" class="status-message"></div>
+  <div class="files-page">
+    <div class="files-top">
+      <a class="btn" href="/">← Notes</a>
+      <h1>Shared files</h1>
+      <button class="btn" id="lock-btn" hidden>Lock</button>
     </div>
 
-    <div id="main-content" style="display: none;">
-    <!-- Upload Section -->
-    <div class="section">
-      <h2>Upload Files</h2>
-      <div class="upload-area" id="upload-area">
-        <p>Click here or drag files to upload</p>
-        <input type="file" id="file-input" multiple />
-      </div>
-      <div id="upload-status" class="status-message"></div>
-      <div id="upload-loading" class="loading">Uploading...</div>
+    <div class="lock-card" id="locked" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      <h2>Files are password protected</h2>
+      <p id="locked-note">Enter the files password.</p>
+      <form id="unlock-form">
+        <input class="input" type="password" id="password-input" placeholder="Password" aria-label="Password" autocomplete="current-password">
+        <button class="btn primary" type="submit">Unlock</button>
+      </form>
+      <div class="form-error" id="password-status" role="alert"></div>
     </div>
 
-    <!-- File List Section -->
-    <div class="section">
-      <h2>Your Files</h2>
-      <div id="breadcrumb"></div>
-      <div class="create-folder-bar">
-        <input type="text" id="folder-name-input" placeholder="New folder name..." />
-        <button class="create-folder-btn" id="create-folder-btn">📁 Create Folder</button>
+    <div id="main-content" hidden>
+      <div class="card">
+        <label class="drop-zone" id="upload-area" tabindex="0">
+          <strong>Drop files here or click to upload</strong>
+          <span class="secondary-line">Files with the same name are kept side by side, never overwritten.</span>
+          <input type="file" id="file-input" multiple hidden>
+        </label>
+        <div class="page-info" id="upload-status" role="status"></div>
       </div>
-      <div id="download-loading" class="loading">Loading files...</div>
-      <div class="file-list" id="file-list">
-        <!-- Files will be populated here -->
-      </div>
-    </div>
-    </div>
-  </div>
 
-  <!-- View Modal -->
-  <div id="view-modal" class="modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2 id="modal-filename"></h2>
-        <button class="modal-close" id="modal-close">Close</button>
-      </div>
-      <div class="modal-body">
-        <div id="modal-body-content"></div>
+      <div class="card">
+        <div class="toolbar">
+          <nav class="crumbs" id="breadcrumb" aria-label="Folder"></nav>
+          <input class="input" id="folder-name-input" placeholder="New folder name" aria-label="New folder name">
+          <button class="btn" id="create-folder-btn">New folder</button>
+        </div>
+        <ul class="list" id="file-list" aria-live="polite"></ul>
       </div>
     </div>
   </div>
-
-  <script src="/js/common.js"></script>
-  <script src="/js/files.js"></script>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <script type="module" src="/js/files.js"></script>
 </body>
 </html>
