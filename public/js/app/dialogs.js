@@ -463,8 +463,10 @@ export async function newPage(navigate, onChange) {
 
 // ---------- Settings ----------
 
-export async function showSettings(session, { onChange, onSessionChange }) {
-  const nameInput = el('input', { class: 'input', value: identity.name, maxlength: 40, autocomplete: 'nickname' });
+export async function showSettings(session, { onChange, onSessionChange, onSignOut }) {
+  const user = session.user || { name: identity.name, username: '', admin: false };
+  const nameInput = el('input', { class: 'input', value: user.name, maxlength: 40, autocomplete: 'name' });
+  const nameError = el('div', { class: 'form-error' });
   const themeSelect = el('select', { class: 'input' }, [
     el('option', { value: 'system', text: 'Match my device' }),
     el('option', { value: 'light', text: 'Light' }),
@@ -486,30 +488,7 @@ export async function showSettings(session, { onChange, onSessionChange }) {
   const adminSection = el('div', {});
   async function renderAdmin() {
     adminSection.replaceChildren();
-    if (!session.adminConfigured) {
-      adminSection.append(el('p', { text: 'Admin tools are off. Add an "admin" password to protected_pages.json to turn them on.' }));
-      return;
-    }
-    if (!session.admin) {
-      const pw = el('input', { class: 'input', type: 'password', placeholder: 'Admin password', autocomplete: 'current-password' });
-      const err = el('div', { class: 'form-error' });
-      adminSection.append(el('div', { class: 'share-url' }, [pw, el('button', {
-        class: 'btn',
-        type: 'button',
-        text: 'Unlock admin',
-        onclick: async () => {
-          try {
-            await post('/api/unlock', { scope: 'admin', password: pw.value });
-            session = await onSessionChange();
-            onChange();
-            renderAdmin();
-          } catch (e) {
-            err.textContent = e.status === 429 ? 'Too many attempts' : 'Incorrect password';
-          }
-        }
-      })]), err);
-      return;
-    }
+    if (!session.admin) return;
     let backups = [];
     try {
       backups = await get('/api/admin/backups');
@@ -517,33 +496,11 @@ export async function showSettings(session, { onChange, onSessionChange }) {
       // ignore
     }
     adminSection.append(
-      el('p', { text: 'You are the admin on this device: you can open every page, lock existing pages, empty the trash and download backups.' }),
+      el('h3', { text: 'Admin' }),
+      el('p', { text: 'You can add and remove people, open every page, lock existing pages, empty the trash and download backups.' }),
       el('div', { class: 'share-url' }, [
-        el('a', { class: 'btn primary', href: '/api/admin/backup', download: '', text: 'Download full backup' }),
-        el('button', {
-          class: 'btn',
-          type: 'button',
-          text: 'Change files password',
-          onclick: () => promptDialog({
-            title: 'Files password',
-            label: 'New password for the shared file manager',
-            type: 'password',
-            confirmLabel: 'Save',
-            validate: v => (v.length < 4 ? 'Use at least 4 characters' : ''),
-            submit: v => post('/api/admin/password', { key: 'files', password: v })
-          }).then(v => v !== undefined && toast('Files password changed'))
-        }),
-        el('button', {
-          class: 'btn',
-          type: 'button',
-          text: 'Leave admin',
-          onclick: async () => {
-            await post('/api/lock', { scope: 'admin' });
-            session = await onSessionChange();
-            onChange();
-            renderAdmin();
-          }
-        })
+        el('button', { class: 'btn primary', type: 'button', text: 'People…', onclick: () => showPeople(session) }),
+        el('a', { class: 'btn', href: '/api/admin/backup', download: '', text: 'Download full backup' })
       ]),
       el('p', { text: backups.length ? 'Automatic daily backups (notes and attachments, last 7 days):' : 'Automatic daily backups will appear here.' }),
       el('ul', { class: 'list' }, backups.map(b => el('li', {}, [
@@ -558,24 +515,48 @@ export async function showSettings(session, { onChange, onSessionChange }) {
   await modal({
     title: 'Settings',
     body: el('div', {}, [
-      el('label', { class: 'field' }, ['Your name (shown to others when you edit)', nameInput]),
+      el('h3', { text: 'Your account' }),
+      el('p', { text: `Signed in as ${user.username}${user.admin ? ' (admin)' : ''}.` }),
+      el('label', { class: 'field' }, ['Your name (shown to others on edits and when you are on a page)', nameInput]),
+      nameError,
+      el('div', { class: 'share-url' }, [
+        el('button', { class: 'btn', type: 'button', text: 'Change password…', onclick: () => changeOwnPassword() }),
+        el('button', {
+          class: 'btn',
+          type: 'button',
+          text: 'Sign out',
+          onclick: async () => {
+            document.querySelector('dialog[open]')?.close();
+            await onSignOut();
+          }
+        })
+      ]),
       el('label', { class: 'field' }, ['Theme', themeSelect]),
       el('h3', { text: 'This device' }),
       el('p', { text: 'Private pages you unlock stay unlocked on this device for 30 days.' }),
-      el('button', {
-        class: 'btn',
-        type: 'button',
-        text: 'Lock all pages on this device',
-        onclick: async () => {
-          await post('/api/lock', { all: true });
-          if (window.caches) await caches.delete('noter-api');
-          toast('All private pages are locked on this device');
-          session = await onSessionChange();
-          onChange();
-          renderAdmin();
-        }
-      }),
-      el('h3', { text: 'Admin' }),
+      el('div', { class: 'share-url' }, [
+        el('button', {
+          class: 'btn',
+          type: 'button',
+          text: 'Lock private pages here',
+          onclick: async () => {
+            await post('/api/lock', { all: true });
+            if (window.caches) await caches.delete('noter-api');
+            toast('Private pages are locked on this device');
+            session = await onSessionChange();
+            onChange();
+          }
+        }),
+        el('button', {
+          class: 'btn',
+          type: 'button',
+          text: 'Sign out everywhere else',
+          onclick: async () => {
+            await post('/api/me/signout-everywhere');
+            toast('Signed out on all your other devices');
+          }
+        })
+      ]),
       adminSection,
       el('h3', { text: 'Keyboard shortcuts' }),
       el('ul', { class: 'list' }, [
@@ -590,10 +571,183 @@ export async function showSettings(session, { onChange, onSessionChange }) {
       {
         label: 'Save',
         primary: true,
-        onClick: () => {
-          identity.name = nameInput.value;
+        onClick: async () => {
+          const name = nameInput.value.trim();
+          if (!name || name === user.name) return true;
+          try {
+            const result = await api('PUT', '/api/me', { name });
+            identity.name = result.user.name;
+            session = await onSessionChange();
+            toast('Name saved');
+          } catch (err) {
+            nameError.textContent = err.message;
+            return false;
+          }
         }
       }
+    ]
+  });
+}
+
+async function changeOwnPassword() {
+  const current = el('input', { class: 'input', type: 'password', autocomplete: 'current-password' });
+  const next = el('input', { class: 'input', type: 'password', autocomplete: 'new-password', minlength: 8 });
+  const error = el('div', { class: 'form-error', role: 'alert' });
+  let changed = false;
+  await modal({
+    title: 'Change your password',
+    body: el('div', {}, [
+      el('p', { text: 'You stay signed in here; your other devices will be signed out.' }),
+      el('label', { class: 'field' }, ['Current password', current]),
+      el('label', { class: 'field' }, ['New password (at least 8 characters)', next]),
+      error
+    ]),
+    actions: [
+      { label: 'Cancel' },
+      {
+        label: 'Change password',
+        primary: true,
+        onClick: async () => {
+          try {
+            await post('/api/me/password', { current: current.value, password: next.value });
+            changed = true;
+          } catch (err) {
+            error.textContent = err.message;
+            return false;
+          }
+        }
+      }
+    ]
+  });
+  if (changed) toast('Password changed');
+}
+
+// ---------- People (admin) ----------
+
+function temporaryPassword() {
+  const words = ['maple', 'river', 'cedar', 'sunny', 'pepper', 'meadow', 'harbor', 'lemon', 'orbit', 'willow', 'canyon', 'breeze'];
+  const pick = () => words[crypto.getRandomValues(new Uint32Array(1))[0] % words.length];
+  return `${pick()}-${pick()}-${crypto.getRandomValues(new Uint32Array(1))[0] % 900 + 100}`;
+}
+
+export async function showPeople(session) {
+  const me = session.user ? session.user.username : '';
+  const listEl = el('ul', { class: 'list' });
+
+  async function load() {
+    let people;
+    try {
+      people = await get('/api/users');
+    } catch (err) {
+      listEl.replaceChildren(el('li', { text: err.message }));
+      return;
+    }
+    listEl.replaceChildren(...people.map(person => el('li', {}, [
+      el('div', { class: 'grow' }, [
+        el('div', { class: 'primary-line', text: `${person.name}${person.username === me ? ' (you)' : ''}` }),
+        el('div', { class: 'secondary-line', text: `${person.username}${person.admin ? ' · admin' : ''}` })
+      ]),
+      el('button', { class: 'btn small', type: 'button', text: 'Reset password', onclick: () => resetPassword(person) }),
+      person.username === me ? null : el('button', {
+        class: 'btn small',
+        type: 'button',
+        text: person.admin ? 'Remove admin' : 'Make admin',
+        onclick: async () => {
+          try {
+            await api('PATCH', `/api/users/${encodeURIComponent(person.username)}`, { admin: !person.admin });
+            load();
+          } catch (err) {
+            toast(err.message, { error: true });
+          }
+        }
+      }),
+      person.username === me ? null : el('button', {
+        class: 'btn small danger',
+        type: 'button',
+        text: 'Remove',
+        onclick: async () => {
+          if (!(await confirmDialog(`${person.name} will be signed out and won’t be able to sign in again. Their pages stay.`, { title: `Remove ${person.name}?`, confirmLabel: 'Remove', danger: true }))) return;
+          try {
+            await del(`/api/users/${encodeURIComponent(person.username)}`);
+            load();
+          } catch (err) {
+            toast(err.message, { error: true });
+          }
+        }
+      })
+    ])));
+  }
+
+  async function resetPassword(person) {
+    const password = await promptDialog({
+      title: `New password for ${person.name}`,
+      note: person.username === me ? 'Your other devices will be signed out.' : `${person.name} will be signed out everywhere. Give them the new password.`,
+      label: 'New password (at least 8 characters)',
+      value: person.username === me ? '' : temporaryPassword(),
+      confirmLabel: 'Set password',
+      validate: v => (v.length < 8 ? 'Use at least 8 characters' : ''),
+      submit: v => post(`/api/users/${encodeURIComponent(person.username)}/password`, { password: v })
+    });
+    if (password !== undefined) {
+      if (person.username !== me) await copyText(password);
+      toast(person.username === me ? 'Password changed' : `Password set (copied) — send it to ${person.name}`);
+    }
+  }
+
+  async function addPerson() {
+    const name = el('input', { class: 'input', placeholder: 'e.g. Elizabeth', autocomplete: 'off' });
+    const username = el('input', { class: 'input', placeholder: 'e.g. elizabeth', autocomplete: 'off', autocapitalize: 'none', spellcheck: false });
+    const password = el('input', { class: 'input', value: temporaryPassword(), autocomplete: 'off' });
+    const admin = el('input', { type: 'checkbox' });
+    const error = el('div', { class: 'form-error', role: 'alert' });
+    let touched = false;
+    username.addEventListener('input', () => (touched = true));
+    name.addEventListener('input', () => {
+      if (!touched) username.value = name.value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 32);
+    });
+    let created;
+    await modal({
+      title: 'Add a person',
+      body: el('div', {}, [
+        el('label', { class: 'field' }, ['Name (what others see)', name]),
+        el('label', { class: 'field' }, ['Username (for signing in)', username]),
+        el('label', { class: 'field' }, ['Temporary password — send this to them', password]),
+        el('label', { class: 'check' }, [admin, 'Admin (can manage people and backups)']),
+        error
+      ]),
+      actions: [
+        { label: 'Cancel' },
+        {
+          label: 'Add person',
+          primary: true,
+          onClick: async () => {
+            try {
+              created = (await post('/api/users', { name: name.value, username: username.value, password: password.value, admin: admin.checked })).user;
+            } catch (err) {
+              error.textContent = err.message;
+              return false;
+            }
+          }
+        }
+      ]
+    });
+    if (created) {
+      const copied = await copyText(`${window.location.origin}/login\nUsername: ${created.username}\nPassword: ${password.value}`);
+      toast(copied ? `Added ${created.name}. Sign-in details copied — send them over.` : `Added ${created.name}.`);
+      load();
+    }
+  }
+
+  await load();
+  await modal({
+    title: 'People',
+    body: el('div', {}, [
+      el('p', { text: 'Everyone here can sign in and use Noter. Private pages still need their own password.' }),
+      listEl
+    ]),
+    actions: [
+      { label: 'Close' },
+      { label: 'Add person', primary: true, onClick: () => { addPerson(); return false; } }
     ]
   });
 }

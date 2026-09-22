@@ -1,11 +1,11 @@
 // Service worker: makes Noter installable and lets you read public pages
 // you've opened before while offline. Private pages are never cached.
-const SHELL_CACHE = 'noter-shell-v1';
+const SHELL_CACHE = 'noter-shell-v2';
 const API_CACHE = 'noter-api';
+// App pages need a sign-in, so only public assets are precached; the app
+// page itself is cached as '/app-shell' the first time it loads signed in.
 const SHELL = [
-  '/',
   '/app.css',
-  '/files.html',
   '/js/theme-init.js',
   '/js/app/main.js',
   '/js/app/page.js',
@@ -64,9 +64,21 @@ self.addEventListener('fetch', (event) => {
 
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/download/') || url.pathname.startsWith('/s/')) return;
 
-  // App pages: network first so updates arrive, shell as fallback
+  // App pages: network first so updates arrive; the last signed-in app
+  // shell as the offline fallback
   if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).catch(() => caches.match('/')));
+    const isAppPage = url.pathname === '/' || /^\/(person|p)\/[^/]+$/.test(url.pathname);
+    event.respondWith(
+      fetch(request)
+        .then(response => {
+          if (isAppPage && response.ok && !response.redirected) {
+            const copy = response.clone();
+            caches.open(SHELL_CACHE).then(cache => cache.put('/app-shell', copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(isAppPage ? '/app-shell' : request).then(hit => hit || Response.error()))
+    );
     return;
   }
 

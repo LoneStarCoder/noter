@@ -1,4 +1,4 @@
-// Shared file manager. Access comes from the session cookie set by /api/unlock.
+// Shared file manager for everyone who is signed in.
 // File and folder names are only ever rendered as text.
 import { api, get, post } from './lib/api.js';
 import { el, icon, modal, confirmDialog, toast, formatSize, timeAgo } from './lib/ui.js';
@@ -13,61 +13,16 @@ function url(endpoint, params = {}) {
   return qs ? `${endpoint}?${qs}` : endpoint;
 }
 
-function showLocked(message) {
-  $('main-content').hidden = true;
-  $('lock-btn').hidden = true;
-  $('locked').hidden = false;
-  if (message) $('locked-note').textContent = message;
-  $('password-input').focus();
-}
-
 function showMain() {
-  $('locked').hidden = true;
   $('main-content').hidden = false;
-  $('lock-btn').hidden = false;
   renderBreadcrumb();
   loadFiles();
 }
 
-// Returns true if the error was an access problem (and shows the lock card)
+// Signed-out requests are sent to the sign-in page by api(); anything else is shown
 function handleAccess(err) {
-  if (err.status === 401) {
-    showLocked('Enter the files password.');
-    return true;
-  }
-  if (err.status === 403) {
-    showLocked(err.message);
-    $('unlock-form').hidden = true;
-    return true;
-  }
-  return false;
+  return err.status === 401;
 }
-
-async function checkAccess() {
-  try {
-    await get('/list-files');
-    showMain();
-  } catch (err) {
-    if (!handleAccess(err)) showLocked('Could not reach the server.');
-  }
-}
-
-$('unlock-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  $('password-status').textContent = '';
-  try {
-    await post('/api/unlock', { scope: 'files', password: $('password-input').value });
-    $('password-input').value = '';
-    showMain();
-  } catch (err) {
-    $('password-status').textContent = err.status === 429 ? 'Too many attempts. Try again later.' : (err.status === 401 ? 'Incorrect password' : err.message);
-  }
-});
-
-$('lock-btn').addEventListener('click', async () => {
-  await post('/api/lock', { scope: 'files' });
-  showLocked('Files are locked on this device.');
-});
 
 // ---------- Upload ----------
 
@@ -246,4 +201,4 @@ $('folder-name-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') createFolder();
 });
 
-checkAccess();
+showMain();

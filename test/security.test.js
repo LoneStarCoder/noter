@@ -37,12 +37,12 @@ test('protected page: read, save, delete, history and attachments all need the p
   assert.strictEqual(page.headers.get('x-noter-protected'), '1');
 });
 
-test('session cookie is HttpOnly, SameSite=Strict and tamper-proof', async () => {
+test('session cookie is HttpOnly, SameSite=Lax and tamper-proof', async () => {
   const c = srv.client();
   const res = await c.request('POST', '/api/unlock', { json: { scope: 'page', page: 'secret', password: 'pagepw' }, raw: true });
   const cookie = res.headers.getSetCookie()[0];
   assert.match(cookie, /HttpOnly/);
-  assert.match(cookie, /SameSite=Strict/);
+  assert.match(cookie, /SameSite=Lax/);
 
   // Forge a cookie claiming admin: signature no longer matches
   const [payload] = cookie.split(';')[0].split('=')[1].split('.');
@@ -51,7 +51,7 @@ test('session cookie is HttpOnly, SameSite=Strict and tamper-proof', async () =>
   const forged = new Client(srv.base);
   forged.cookie = `noter_session=${Buffer.from(JSON.stringify(data)).toString('base64url')}.${cookie.split('.')[1].split(';')[0]}`;
   assert.strictEqual((await forged.get('/api/pages/secret')).status, 401);
-  assert.strictEqual((await forged.get('/api/session')).data.admin, false);
+  assert.strictEqual((await forged.get('/api/session')).status, 401, 'a forged cookie is not a sign-in');
 });
 
 test('changing a page password revokes other sessions', async () => {
@@ -151,20 +151,11 @@ test('page names are sanitized and empty names rejected', async () => {
   assert.strictEqual((await c.save('%21%21', 'x')).status, 400);
 });
 
-test('file manager needs the files password (cookie), and is off without one', async () => {
-  const anon = srv.client();
+test('file manager is for signed-in people only', async () => {
+  const anon = srv.anon();
   assert.strictEqual((await anon.get('/list-files')).status, 401);
   assert.strictEqual((await anon.upload('/upload', [['a.txt', 'a']])).status, 401);
-  const c = srv.client();
-  assert.strictEqual((await c.unlock('files', 'filespw')).status, 200);
-  assert.strictEqual((await c.get('/list-files')).status, 200);
-
-  const bare = await startServer({ passwords: {} });
-  try {
-    assert.strictEqual((await bare.client().get('/list-files')).status, 403);
-  } finally {
-    bare.close();
-  }
+  assert.strictEqual((await srv.client().get('/list-files')).status, 200);
 });
 
 test('file manager: bad folder params are rejected and do not crash the server', async () => {

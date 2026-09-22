@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Sign in · Noter</title>
+  <meta name="theme-color" content="#2f5fd0">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/js/theme-init.js"></script>
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100%; padding: 16px; }
+    .auth-card {
+      width: min(400px, 100%); padding: 28px 26px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow);
+    }
+    .auth-card .brand { justify-content: center; font-size: 1.4rem; margin-bottom: 6px; }
+    .auth-card .brand img { width: 34px; height: 34px; }
+    .auth-card h1 { font-size: 1.05rem; font-weight: 600; text-align: center; margin: 0 0 18px; color: var(--muted); }
+    .auth-card .btn.primary { width: 100%; margin-top: 8px; min-height: 42px; font-size: 1rem; }
+    .auth-card .hint { font-size: 0.85rem; color: var(--muted); margin: 0 0 6px; }
+    .auth-card code { font-family: var(--mono); background: var(--code-bg); padding: 1px 5px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <main class="auth-card">
+    <div class="brand"><img src="/icons/icon.svg" alt=""><span>Noter</span></div>
+
+    <form id="login-form" hidden>
+      <h1>Sign in to continue</h1>
+      <label class="field">Username
+        <input class="input" id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      </label>
+      <label class="field">Password
+        <input class="input" id="login-password" name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn primary" type="submit">Sign in</button>
+      <div class="form-error" id="login-error" role="alert"></div>
+      <p class="hint">No account? Ask the person who runs this Noter to add you.</p>
+    </form>
+
+    <form id="setup-form" hidden>
+      <h1>Welcome! Create the first account</h1>
+      <p class="hint">This account will be the admin. You'll add everyone else from Settings → People.</p>
+      <label class="field">Setup code
+        <input class="input" id="setup-code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="XXXXX-XXXXX" required>
+      </label>
+      <p class="hint">The setup code is printed in the server log when Noter starts without any accounts (on Render: the service's Logs tab).</p>
+      <label class="field">Your name
+        <input class="input" id="setup-name" autocomplete="name" placeholder="e.g. Brody" required>
+      </label>
+      <label class="field">Username
+        <input class="input" id="setup-username" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="e.g. brody" required>
+      </label>
+      <label class="field">Password (at least 8 characters)
+        <input class="input" id="setup-password" type="password" autocomplete="new-password" minlength="8" required>
+      </label>
+      <button class="btn primary" type="submit">Create account</button>
+      <div class="form-error" id="setup-error" role="alert"></div>
+    </form>
+  </main>
+  <script type="module" src="/js/login.js"></script>
+</body>
+</html>

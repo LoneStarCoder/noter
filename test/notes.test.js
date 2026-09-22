@@ -175,8 +175,14 @@ test('search finds text across pages with snippets', async () => {
 test('live events: presence and update notifications', async () => {
   const c = srv.client('Hal');
   await c.save('live', 'start');
+  const viewer = srv.client('Ivy');
+  await viewer.get('/api/session'); // signs in
   const controller = new AbortController();
-  const res = await fetch(`${srv.base}/api/pages/live/events?client=tab1&user=Ivy`, { signal: controller.signal });
+  // The ?user= parameter is ignored: presence shows the account's name
+  const res = await fetch(`${srv.base}/api/pages/live/events?client=tab1&user=Mallory`, {
+    signal: controller.signal,
+    headers: { Cookie: viewer.cookie }
+  });
   assert.strictEqual(res.headers.get('content-type'), 'text/event-stream');
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -254,10 +260,11 @@ test('password file edits are picked up without a restart; plaintext entries sti
   }
 });
 
-test('app routes serve the shell and share page', async () => {
-  for (const url of ['/', '/person/anything', '/s/whatever', '/files.html', '/vendor/marked.esm.js', '/vendor/purify.es.mjs', '/vendor/diff3.mjs']) {
-    const res = await fetch(srv.base + url);
+test('app routes serve the shell and share page to signed-in people', async () => {
+  const c = srv.client();
+  for (const url of ['/', '/person/anything', '/s/whatever', '/files.html', '/login', '/vendor/marked.esm.js', '/vendor/purify.es.mjs', '/vendor/diff3.mjs']) {
+    const res = await c.get(url);
     assert.strictEqual(res.status, 200, url);
   }
-  assert.strictEqual((await fetch(srv.base + '/api/nope')).status, 404);
+  assert.strictEqual((await c.get('/api/nope')).status, 404);
 });

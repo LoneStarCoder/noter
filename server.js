@@ -13,6 +13,7 @@ const { ShareStore } = require('./lib/shares');
 const { createLiveHub } = require('./lib/live');
 const { createBackups, fullBackupEntries } = require('./lib/backups');
 const { writeZip } = require('./lib/zip');
+const { UserStore, normalizeUsername } = require('./lib/users');
 
 const TEXT_PREVIEW_PATTERN = /\.(txt|md|csv|json|xml|html|css|js|py|sh|yml|yaml|log)$/i;
 const INLINE_IMAGE_PATTERN = /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i;
@@ -46,6 +47,7 @@ function createApp(options = {}) {
 
   const secret = options.secret || loadSecret(dataDir);
   const passwords = new PasswordStore({ dataDir, initial: options.passwords });
+  const users = new UserStore(dataDir, options.users);
   const sessions = createSessions(secret);
   const notes = new NoteStore(dataDir);
   const shares = new ShareStore(dataDir);
@@ -60,6 +62,9 @@ function createApp(options = {}) {
   const maxNoteSize = options.maxNoteSize || process.env.NOTER_MAX_NOTE_SIZE || '5mb';
 
   if (options.backgroundJobs) {
+    if (users.count() === 0) {
+      console.log(`Noter setup: no accounts yet. Open /login and create the first (admin) account with setup code ${users.setupCode()}`);
+    }
     backups.schedule();
     notes.purgeExpiredTrash();
     setInterval(() => notes.purgeExpiredTrash(), 6 * 60 * 60 * 1000).unref();
@@ -74,12 +79,26 @@ function createApp(options = {}) {
     return req.noterSession;
   }
 
+  // The signed-in account, or null. A session only counts while its token
+  // version matches the account (password changes and removals revoke it).
+  function currentUser(req) {
+    if (req.noterUser !== undefined) return req.noterUser;
+    const s = session(req);
+    const user = s.u ? users.get(s.u) : null;
+    req.noterUser = user && user.version === s.v ? { username: normalizeUsername(s.u), name: user.name, admin: Boolean(user.admin) } : null;
+    return req.noterUser;
+  }
+
+  // Account admins, plus the legacy "admin" password from protected_pages.json
   function isAdmin(req) {
+    const user = currentUser(req);
+    if (user && user.admin) return true;
     return passwords.has('admin') && session(req).a === fingerprint('admin');
   }
 
+  // Everyone who is signed in can use the shared file manager
   function canUseFiles(req) {
-    return isAdmin(req) || (passwords.has('files') && session(req).f === fingerprint('files'));
+    return Boolean(currentUser(req));
   }
 
   function isProtected(name) {
@@ -100,11 +119,21 @@ function createApp(options = {}) {
     }
     if (current.f && current.f !== fingerprint('files')) current.f = null;
     if (current.a && current.a !== fingerprint('admin')) current.a = null;
+    if (current.u) {
+      const user = users.get(current.u);
+      if (!user || user.version !== current.v) {
+        current.u = null;
+        current.v = null;
+      }
+    }
     sessions.write(req, res, current);
+    req.noterUser = undefined;
   }
 
+  // Name shown for edits, history and presence: the signed-in account's name
   function by(req) {
-    return cleanDisplayName(req.get('X-Noter-User'));
+    const user = currentUser(req);
+    return user ? user.name : cleanDisplayName(req.get('X-Noter-User'));
   }
 
   // ---------- Middleware ----------
@@ -125,7 +154,7 @@ function createApp(options = {}) {
 
   // CSRF defence for cookie auth: state-changing requests must carry a custom
   // header (forces a CORS preflight) and, if the browser sends an Origin, it
-  // must be ours. Session cookies are also SameSite=Strict.
+  // must be ours.
   app.use((req, res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
     if (req.get('X-Noter') !== '1') {
@@ -162,21 +191,96 @@ function createApp(options = {}) {
   }
 
   function requireAdmin(req, res, next) {
-    if (!passwords.has('admin')) return next(httpError(403, 'No admin password is configured'));
     if (!isAdmin(req)) return res.status(401).json({ success: false, message: 'Admin access required' });
     next();
   }
 
   function requireFiles(req, res, next) {
-    if (!passwords.has('files') && !isAdmin(req)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Disabled: set a "files" password in protected_pages.json to enable this.'
-      });
-    }
-    if (!canUseFiles(req)) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    if (!canUseFiles(req)) return res.status(401).json({ success: false, signIn: true, message: 'Please sign in' });
     next();
   }
+
+  // ---------- Sign-in (public) ----------
+
+  app.get('/login', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'login.html')));
+
+  app.get('/api/auth/status', (req, res) => {
+    res.set('Cache-Control', 'no-store').json({ user: currentUser(req), setupRequired: users.count() === 0 });
+  });
+
+  function signIn(req, res, username) {
+    const user = users.get(username);
+    // A new sign-in starts clean: no page unlocks carried over from someone else
+    const s = session(req);
+    s.u = normalizeUsername(username);
+    s.v = user.version;
+    s.p = {};
+    s.f = null;
+    s.a = null;
+    sessions.write(req, res, s);
+    req.noterUser = undefined;
+  }
+
+  function rateLimited(req, res) {
+    if (!limiter.isBlocked(req.ip)) return false;
+    res.status(429).json({ success: false, message: 'Too many failed attempts. Try again in a few minutes.' });
+    return true;
+  }
+
+  app.post('/api/auth/login', (req, res) => {
+    if (rateLimited(req, res)) return;
+    const { username, password } = req.body || {};
+    const account = users.authenticate(username, password);
+    if (!account) {
+      limiter.recordFailure(req.ip);
+      return res.status(401).json({ success: false, message: 'Wrong username or password' });
+    }
+    signIn(req, res, account);
+    res.json({ success: true, user: currentUser(req) });
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    sessions.write(req, res, { u: null, v: null, p: {}, f: null, a: null });
+    res.json({ success: true });
+  });
+
+  // First account: needs the one-time setup code from the server log (or the
+  // legacy admin password from protected_pages.json)
+  app.post('/api/auth/setup', (req, res, next) => {
+    if (users.count() > 0) return next(httpError(409, 'Noter is already set up. Please sign in.'));
+    if (rateLimited(req, res)) return;
+    const { code, username, name, password } = req.body || {};
+    const legacyAdmin = passwords.has('admin') && passwords.verify('admin', typeof code === 'string' ? code : '');
+    if (!users.checkSetupCode(code) && !legacyAdmin) {
+      limiter.recordFailure(req.ip);
+      return res.status(401).json({ success: false, message: 'That setup code is not right' });
+    }
+    try {
+      users.addUser({ username, name, password, admin: true });
+    } catch (err) {
+      return next(err);
+    }
+    users.finishSetup();
+    signIn(req, res, username);
+    res.json({ success: true, user: currentUser(req) });
+  });
+
+  // ---------- Everything below requires a signed-in account ----------
+
+  const PUBLIC_FILES = new Set(['/app.css', '/sw.js', '/manifest.webmanifest', '/login.html', '/share.html']);
+  const PUBLIC_PREFIXES = ['/js/', '/vendor/', '/icons/', '/s/', '/api/share/'];
+
+  app.use((req, res, next) => {
+    if (currentUser(req)) return next();
+    if (PUBLIC_FILES.has(req.path) || PUBLIC_PREFIXES.some(prefix => req.path.startsWith(prefix))) return next();
+    // Page loads (browsers ask for text/html) go to the sign-in page; API calls get a 401
+    const wantsPage = /text\/html/.test(req.get('Accept') || '');
+    if ((req.method === 'GET' || req.method === 'HEAD') && wantsPage && !req.path.startsWith('/api/')) {
+      const target = req.originalUrl.startsWith('/') && !req.originalUrl.startsWith('//') ? req.originalUrl : '/';
+      return res.redirect(`/login?next=${encodeURIComponent(target)}`);
+    }
+    res.status(401).json({ success: false, signIn: true, message: 'Please sign in' });
+  });
 
   // ---------- Static pages ----------
 
@@ -199,7 +303,8 @@ function createApp(options = {}) {
 
   app.get('/api/session', (req, res) => {
     const s = session(req);
-    res.json({
+    res.set('Cache-Control', 'no-store').json({
+      user: currentUser(req),
       admin: isAdmin(req),
       adminConfigured: passwords.has('admin'),
       files: canUseFiles(req),
@@ -533,7 +638,7 @@ function createApp(options = {}) {
 
   app.get('/api/pages/:name/events', pageParam, requirePageAccess, (req, res) => {
     const clientId = typeof req.query.client === 'string' ? req.query.client.slice(0, 40) : '';
-    const user = cleanDisplayName(req.query.user) || 'Someone';
+    const user = by(req) || 'Someone';
     if (!live.join(req, res, req.pageName, { clientId, user })) {
       res.status(503).json({ success: false, message: 'Too many live connections' });
     }
@@ -611,7 +716,69 @@ function createApp(options = {}) {
     res.download(file);
   });
 
-  // ---------- File manager (shared "files" password) ----------
+  // ---------- Your account ----------
+
+  app.put('/api/me', (req, res) => {
+    const user = currentUser(req);
+    const updated = users.update(user.username, { name: req.body && req.body.name });
+    res.json({ success: true, user: updated });
+  });
+
+  app.post('/api/me/password', (req, res, next) => {
+    const user = currentUser(req);
+    const { current, password } = req.body || {};
+    if (rateLimited(req, res)) return;
+    if (!users.authenticate(user.username, current)) {
+      limiter.recordFailure(req.ip);
+      return next(httpError(401, 'Your current password is not right'));
+    }
+    users.setPassword(user.username, password);
+    signIn(req, res, user.username); // stay signed in here; other devices are signed out
+    res.json({ success: true });
+  });
+
+  app.post('/api/me/signout-everywhere', (req, res) => {
+    const user = currentUser(req);
+    users.revokeSessions(user.username);
+    signIn(req, res, user.username);
+    res.json({ success: true });
+  });
+
+  // ---------- People (admin) ----------
+
+  app.get('/api/users', requireAdmin, (req, res) => {
+    res.set('Cache-Control', 'no-store').json(users.list());
+  });
+
+  app.post('/api/users', requireAdmin, (req, res) => {
+    const { username, name, password, admin } = req.body || {};
+    res.json({ success: true, user: users.addUser({ username, name, password, admin: admin === true }) });
+  });
+
+  app.patch('/api/users/:username', requireAdmin, (req, res) => {
+    const { name, admin } = req.body || {};
+    const updated = users.update(req.params.username, {
+      name: typeof name === 'string' ? name : undefined,
+      admin: typeof admin === 'boolean' ? admin : undefined
+    });
+    res.json({ success: true, user: updated });
+  });
+
+  app.post('/api/users/:username/password', requireAdmin, (req, res) => {
+    users.setPassword(req.params.username, req.body && req.body.password);
+    if (normalizeUsername(req.params.username) === currentUser(req).username) signIn(req, res, req.params.username);
+    res.json({ success: true });
+  });
+
+  app.delete('/api/users/:username', requireAdmin, (req, res, next) => {
+    if (normalizeUsername(req.params.username) === currentUser(req).username) {
+      return next(httpError(400, 'You can’t remove your own account'));
+    }
+    users.remove(req.params.username);
+    res.json({ success: true });
+  });
+
+  // ---------- File manager (any signed-in account) ----------
 
   function getSafeUploadPath(folder, filename) {
     if (typeof folder !== 'string' || typeof filename !== 'string') return null;

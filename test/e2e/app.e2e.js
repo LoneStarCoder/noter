@@ -8,6 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { UserStore } = require('../../lib/users');
 
 let chromium;
 try {
@@ -43,8 +44,18 @@ async function waitFor(fn, timeout = 6000) {
   }
 }
 
+const PASSWORD = 'password-123';
+const ACCOUNTS = [
+  { username: 'brody', name: 'Brody', password: PASSWORD, admin: true },
+  { username: 'alice', name: 'Alice', password: PASSWORD },
+  { username: 'bob', name: 'Bob', password: PASSWORD },
+  { username: 'phone', name: 'Phone', password: PASSWORD },
+  { username: 'reader', name: 'Reader', password: PASSWORD }
+];
+
 function seed() {
-  fs.writeFileSync(path.join(dataDir, 'protected_pages.json'), JSON.stringify({ brody: 'brodypw', files: 'filespw', admin: 'adminpw' }));
+  fs.writeFileSync(path.join(dataDir, 'protected_pages.json'), JSON.stringify({ brody: 'brodypw' }));
+  new UserStore(dataDir, ACCOUNTS); // eslint-disable-line no-new
   const notes = {
     home: 'Welcome to the family notebook!\nSee the [[beachlist]] and github.com/LoneStarCoder.',
     beachlist: '# Beach trip\n- [ ] sunscreen\n- [x] towels\n- [ ] snacks #trip',
@@ -70,17 +81,24 @@ async function main() {
   const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
   const consoleProblems = [];
 
-  async function person(name, viewport = { width: 1200, height: 800 }) {
+  // A person in their own browser. With a username they sign in through the
+  // real sign-in page (arriving at / first, so the redirect is exercised too).
+  async function person(name, { viewport = { width: 1200, height: 800 }, username, password = PASSWORD } = {}) {
     const context = await browser.newContext({ viewport, acceptDownloads: true, permissions: ['clipboard-read', 'clipboard-write'] });
-    await context.addInitScript(n => {
-      if (!localStorage.getItem('noter-name')) localStorage.setItem('noter-name', n);
-    }, name);
     const page = await context.newPage();
     page.on('console', m => {
       if (m.type() === 'error' && !/status of (401|409|404)|ERR_INTERNET_DISCONNECTED/.test(m.text())) consoleProblems.push(`${name}: ${m.text()}`);
     });
     page.on('pageerror', e => consoleProblems.push(`${name} pageerror: ${e.message}`));
     page.on('dialog', d => d.accept());
+    if (username) {
+      await page.goto(BASE + '/');
+      await page.waitForURL('**/login?next=%2F');
+      await page.fill('#login-username', username);
+      await page.fill('#login-password', password);
+      await page.click('#login-form button[type=submit]');
+      await page.waitForURL(BASE + '/');
+    }
     return { context, page };
   }
 
@@ -95,11 +113,25 @@ async function main() {
   const saved = page => waitFor(async () => (await status(page).textContent()) === 'Saved' || /Merged/.test(await status(page).textContent()));
 
   try {
-    const alice = await person('Alice');
-    const bob = await person('Bob');
+    // ---- Signing in
     const anon = await person('Visitor');
+    await anon.page.goto(BASE + '/person/beachlist');
+    await anon.page.waitForURL('**/login?next=%2Fperson%2Fbeachlist');
+    await anon.page.waitForSelector('#login-form:not([hidden])');
+    check('visitors without an account only see the sign-in page', true);
+    await anon.page.fill('#login-username', 'alice');
+    await anon.page.fill('#login-password', 'not-the-password');
+    await anon.page.click('#login-form button[type=submit]');
+    await anon.page.waitForSelector('#login-error:text("Wrong username or password")');
+    check('a wrong password is refused', anon.page.url().includes('/login'));
+    const apiBlocked = await anon.page.evaluate(async () => (await fetch('/api/pages')).status);
+    check('the API refuses signed-out requests', apiBlocked === 401, String(apiBlocked));
+
+    const alice = await person('Alice', { username: 'alice' });
+    const bob = await person('Bob', { username: 'bob' });
     const A = alice.page;
     const B = bob.page;
+    check('signing in returns you to where you were going', A.url() === BASE + '/');
 
     // ---- Rendering and navigation
     await A.goto(BASE + '/');
@@ -242,8 +274,8 @@ async function main() {
     await anon.page.waitForSelector('#share-content:has-text("Brody private notes")');
     check('share link shows a private page read-only', true);
     await anon.page.goto(BASE + '/person/brody');
-    await anon.page.waitForSelector('.lock-card');
-    check('…without unlocking the page itself', true);
+    await anon.page.waitForURL('**/login**');
+    check('…without giving access to the rest of the site', true);
 
     // ---- New private page from the dialog
     await A.goto(BASE + '/');
@@ -326,8 +358,6 @@ async function main() {
 
     // ---- Files page
     await A.goto(BASE + '/files.html');
-    await A.fill('#password-input', 'filespw');
-    await A.click('#unlock-form button');
     await A.waitForSelector('#main-content:not([hidden])');
     await A.setInputFiles('#file-input', [{ name: `it's "fine".txt`, mimeType: 'text/plain', buffer: Buffer.from('hello files') }]);
     await A.waitForSelector('#file-list li:has-text("fine")');
@@ -336,19 +366,48 @@ async function main() {
     check('file manager uploads and previews files', true);
     await A.keyboard.press('Escape');
 
-    // ---- Admin
+    // ---- Admin: backups and people
     await A.goto(BASE + '/');
+    await A.waitForSelector('#preview');
     await A.click('#settings-btn');
-    await A.fill('dialog[open] input[type=password]', 'adminpw');
-    await A.click('dialog[open] >> text=Unlock admin');
-    await A.waitForSelector('dialog[open] >> text=Download full backup');
-    const [download] = await Promise.all([A.waitForEvent('download'), A.click('dialog[open] >> text=Download full backup')]);
-    const zip = fs.readFileSync(await download.path());
-    check('admin can download a full backup zip', zip.subarray(0, 2).toString() === 'PK' && zip.length > 500, `${zip.length} bytes`);
+    check('members don\'t see admin tools', (await A.locator('dialog[open] >> text=People…').count()) === 0);
     await A.keyboard.press('Escape');
 
+    const brody = await person('Brody', { username: 'brody' });
+    const Z = brody.page;
+    await Z.click('#settings-btn');
+    await Z.waitForSelector('dialog[open] >> text=Download full backup');
+    const [download] = await Promise.all([Z.waitForEvent('download'), Z.click('dialog[open] >> text=Download full backup')]);
+    const zip = fs.readFileSync(await download.path());
+    check('admin can download a full backup zip', zip.subarray(0, 2).toString() === 'PK' && zip.length > 500, `${zip.length} bytes`);
+
+    await Z.click('dialog[open] >> text=People…');
+    await Z.waitForSelector('dialog[open] h2:text("People")');
+    await Z.waitForSelector('dialog[open] li:has-text("alice")');
+    await Z.click('dialog[open] >> text=Add person');
+    await Z.waitForSelector('dialog[open] h2:text("Add a person")');
+    const addDialog = Z.locator('dialog[open]').last(); // stacked on top of People
+    await addDialog.locator('input').nth(0).fill('Grandma Jo');
+    const tempPassword = await addDialog.locator('input').nth(2).inputValue();
+    const grandmaUsername = await addDialog.locator('input').nth(1).inputValue();
+    await addDialog.locator('.modal-footer .btn.primary').click();
+    await Z.waitForSelector('dialog[open] li:has-text("Grandma Jo")');
+    check('admin adds a person (username filled in from the name)', grandmaUsername === 'grandmajo', grandmaUsername);
+
+    const grandma = await person('Grandma', { username: grandmaUsername, password: tempPassword });
+    check('the new person signs in with the temporary password', grandma.page.url() === BASE + '/');
+
+    await Z.click(`dialog[open] li:has-text("Grandma Jo") button:has-text("Remove")`);
+    await Z.locator('dialog[open]').last().locator('.btn.danger:has-text("Remove")').click();
+    await Z.waitForFunction(() => !document.querySelector('dialog[open] li') || ![...document.querySelectorAll('dialog[open] li')].some(li => li.textContent.includes('Grandma Jo')));
+    await grandma.page.goto(BASE + '/person/beachlist');
+    await grandma.page.waitForURL('**/login**');
+    check('a removed person is signed out immediately', true);
+    await Z.keyboard.press('Escape');
+    await Z.keyboard.press('Escape');
+
     // ---- Mobile layout
-    const phone = await person('Phone', { width: 390, height: 800 });
+    const phone = await person('Phone', { viewport: { width: 390, height: 800 }, username: 'phone' });
     await phone.page.goto(BASE + '/person/beachlist');
     await phone.page.waitForSelector('#preview');
     const noOverflow = await phone.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
@@ -359,7 +418,7 @@ async function main() {
     check('mobile: no sideways scrolling, drawer navigation works', noOverflow);
 
     // ---- Offline reading (service worker)
-    const reader = await person('Reader');
+    const reader = await person('Reader', { username: 'reader' });
     await reader.page.goto(BASE + '/person/beachlist');
     await reader.page.waitForSelector('#preview');
     await reader.page.evaluate(() => navigator.serviceWorker.ready);
@@ -370,6 +429,16 @@ async function main() {
     const offlineOk = await waitFor(async () => (await reader.page.locator('#preview').textContent()).includes('Beach trip'), 5000);
     check('a public page you opened before is readable offline', offlineOk);
     check('offline banner shows', await reader.page.locator('#offline-banner').isVisible());
+
+    // ---- Sign out
+    await B.goto(BASE + '/');
+    await B.waitForSelector('#preview');
+    await B.click('#settings-btn');
+    await B.click('dialog[open] >> text=Sign out');
+    await B.waitForURL('**/login');
+    await B.goto(BASE + '/person/beachlist');
+    await B.waitForURL('**/login**');
+    check('signing out locks the whole site again', true);
 
     check('no unexpected console errors', consoleProblems.length === 0, consoleProblems.slice(0, 5).join(' | '));
   } catch (err) {
