@@ -57,7 +57,7 @@ at least 8 characters.
 
 | Method & path | Body | Response |
 | --- | --- | --- |
-| `GET /api/session` | | `{ user, admin, unlocked: [private pages unlocked on this device], … }` |
+| `GET /api/session` | | `{ user, admin, unlocked: [private pages you have unlocked], … }` |
 | `PUT /api/me` | `{ name }` | `{ success, user }` |
 | `POST /api/me/password` | `{ current, password }` | `{ success }`. Stays signed in here; other sessions are signed out. `401` if `current` is wrong (rate-limited) |
 | `POST /api/me/signout-everywhere` | | `{ success }`. Revokes every other session |
@@ -76,9 +76,9 @@ at least 8 characters.
 
 | Method & path | Body | Response |
 | --- | --- | --- |
-| `GET /api/pages` | | Pages you can open, home first then newest: `[{ name, title, preview, tags, size, updatedAt, updatedBy, protected }]` |
+| `GET /api/pages` | | Every page, home first then newest: `[{ name, title, preview, tags, size, updatedAt, updatedBy, protected, locked }]`. Private pages you haven't unlocked have `locked: true` and only `name`/`updatedAt` (empty title, preview and tags) |
 | `GET /api/search?q=` | | `[{ name, title, snippet }]`: every word must appear in the name or text; up to 50 results |
-| `GET /api/pages/:name` | | `{ name, text, version, updatedAt, updatedBy, exists, protected, viewers }`; `401 {locked}` for a private page you haven't unlocked. A missing page returns `exists: false`, `text: ""` |
+| `GET /api/pages/:name` | | `{ name, text, version, updatedAt, updatedBy, exists, protected, access, viewers }` (`access`: `public`, `password` or `admin`); `401 {locked}` for a private page you haven't unlocked. A missing page returns `exists: false`, `text: ""` |
 | `PUT /api/pages/:name` | `{ text, baseVersion?, force?, snapshot? }` | See *Saving* below |
 | `DELETE /api/pages/:name` | | `{ success, trashId }`. Moves the page (with history and attachments) to Trash. `403` for `home` |
 | `POST /api/pages/:name/rename` | `{ to }` | `{ success, name }`. Moves history, attachments, share links and password; `409` if the name is taken; `403` for `home` |
@@ -108,8 +108,8 @@ Responses:
 
 | Method & path | Access | Body | Response |
 | --- | --- | --- | --- |
-| `POST /api/unlock` | rate-limited | `{ scope: "page", page, password }` | `{ success }`; the session remembers the unlock; `401` if wrong |
-| `POST /api/lock` | | `{ scope: "page", page }` or `{ all: true }` | `{ success }`. Forgets unlocks on this device (you stay signed in) |
+| `POST /api/unlock` | rate-limited | `{ scope: "page", page, password }` | `{ success }`. The unlock is remembered for this browser **and your account** (all your devices) until the page password changes; `401` if wrong |
+| `POST /api/lock` | | `{ scope: "page", page }` or `{ all: true }` | `{ success }`. Locks the page (or all private pages) again for you: this browser and your account. You stay signed in |
 | `POST /api/pages/:name/password` | page access | `{ password }` (≥ 4 characters) or `{ password: null }` | `{ success, protected }`. Anyone can set a password on a new or empty page; existing pages with content need an admin |
 
 ## History

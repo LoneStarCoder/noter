@@ -224,6 +224,7 @@ label.field .input { margin-top: 4px; color: var(--text); }
 }
 .page-link .title span { overflow: hidden; text-overflow: ellipsis; }
 .page-link .title svg { width: 13px; height: 13px; color: var(--muted); flex: none; }
+.page-link.locked .title span { color: var(--muted); }
 .page-link .meta { font-size: 0.78rem; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-empty { padding: 16px; color: var(--faint); font-size: 0.9rem; text-align: center; }
 .list-section { padding: 10px 10px 4px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }

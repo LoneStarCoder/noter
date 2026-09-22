@@ -121,6 +121,58 @@ test('the last admin cannot be removed or demoted, and you cannot remove yoursel
   assert.strictEqual((await second.get('/api/users')).status, 200, 'promoted person is an admin');
 });
 
+test('private page unlocks are remembered on the account, across sign-outs and devices', async () => {
+  const admin = await srv.admin();
+  await admin.post('/api/users', { username: 'keeper', name: 'Keeper', password: 'keeper-password' });
+  const laptop = new Client(srv.base);
+  await laptop.post('/api/auth/login', { username: 'keeper', password: 'keeper-password' });
+  // A new private page, created by this person
+  assert.strictEqual((await laptop.post('/api/pages/keepsake/password', { password: 'keep1234' })).status, 200);
+  assert.strictEqual((await laptop.save('keepsake', 'mine')).status, 200);
+  const listed = (await laptop.get('/api/pages')).data.find(p => p.name === 'keepsake');
+  assert.ok(listed && !listed.locked && listed.title === 'mine', 'creator sees it unlocked in the list');
+
+  // Sign out and back in, and on another device: still unlocked
+  await laptop.post('/api/auth/logout');
+  await laptop.post('/api/auth/login', { username: 'keeper', password: 'keeper-password' });
+  assert.strictEqual((await laptop.get('/api/pages/keepsake')).data.text, 'mine');
+  const phone = new Client(srv.base);
+  await phone.post('/api/auth/login', { username: 'keeper', password: 'keeper-password' });
+  assert.strictEqual((await phone.get('/api/pages/keepsake')).status, 200);
+  assert.ok((await phone.get('/api/session')).data.unlocked.includes('keepsake'));
+
+  // Someone else sees it listed but locked
+  const other = srv.client('Other');
+  const seen = (await other.get('/api/pages')).data.find(p => p.name === 'keepsake');
+  assert.ok(seen && seen.locked);
+  assert.strictEqual((await other.get('/api/pages/keepsake')).status, 401);
+  await other.unlock('page', 'keep1234', 'keepsake');
+  assert.strictEqual((await other.get('/api/pages/keepsake')).status, 200);
+
+  // Renaming keeps it unlocked for everyone who had it
+  assert.strictEqual((await laptop.post('/api/pages/keepsake/rename', { to: 'keepsake2' })).status, 200);
+  assert.strictEqual((await other.get('/api/pages/keepsake2')).status, 200);
+  assert.strictEqual((await phone.get('/api/pages/keepsake2')).status, 200);
+
+  // Changing the password re-locks it for others (the changer keeps access)
+  await laptop.post('/api/pages/keepsake2/password', { password: 'newkeep1' });
+  assert.strictEqual((await other.get('/api/pages/keepsake2')).status, 401);
+  assert.strictEqual((await phone.get('/api/pages/keepsake2')).status, 200, 'same account keeps access');
+
+  // "Lock it again for me" works across devices too
+  await phone.post('/api/lock', { scope: 'page', page: 'keepsake2' });
+  assert.strictEqual((await phone.get('/api/pages/keepsake2')).status, 401);
+  assert.strictEqual((await laptop.get('/api/pages/keepsake2')).status, 200, 'this browser keeps its own unlock');
+  await laptop.post('/api/lock', { all: true });
+  assert.strictEqual((await laptop.get('/api/pages/keepsake2')).status, 401);
+});
+
+test('an empty page can be created right away', async () => {
+  const c = srv.client();
+  assert.strictEqual((await c.save('blank-start', '')).status, 200);
+  assert.ok((await c.get('/api/pages')).data.some(p => p.name === 'blank-start'));
+});
+
 test('share links still work without signing in', async () => {
   const c = srv.client();
   await c.save('shareme', 'public recipe');

@@ -93,12 +93,17 @@ test('save rejects bodies without a text string', async () => {
   assert.strictEqual((await c.request('PUT', '/api/pages/victim', { body: 'text=gone', headers: { 'Content-Type': 'text/plain' } })).status, 400);
 });
 
-test('protected pages are hidden from lists and search unless unlocked', async () => {
+test('locked private pages are listed by name only, and never searched', async () => {
   const anon = srv.client();
   await anon.save('public', 'hello secretword');
-  const pages = (await anon.get('/api/pages')).data.map(p => p.name);
-  assert.ok(pages.includes('public'));
-  assert.ok(!pages.includes('secret'));
+  const pages = (await anon.get('/api/pages')).data;
+  assert.ok(pages.some(p => p.name === 'public' && !p.locked));
+  const locked = pages.find(p => p.name === 'secret');
+  assert.ok(locked && locked.locked && locked.protected, 'listed with a lock');
+  assert.strictEqual(locked.title, '');
+  assert.strictEqual(locked.preview, '');
+  assert.deepStrictEqual(locked.tags, []);
+  assert.ok(!JSON.stringify(locked).includes('original'), 'no content leaks');
   const results = (await anon.get('/api/search?q=original')).data;
   assert.deepStrictEqual(results, []);
 

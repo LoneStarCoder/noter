@@ -105,9 +105,35 @@ function createApp(options = {}) {
     return passwords.has(name);
   }
 
+  // Unlocked with the password, on this device (session) or on the account
+  function hasUnlocked(req, name) {
+    const fp = fingerprint(name);
+    if (!fp) return false;
+    if (session(req).p[name] === fp) return true;
+    const user = currentUser(req);
+    return Boolean(user) && users.pageGrant(user.username, name) === fp;
+  }
+
   function canAccessPage(req, name) {
     if (!isProtected(name) || isAdmin(req)) return true;
-    return session(req).p[name] === fingerprint(name);
+    return hasUnlocked(req, name);
+  }
+
+  // Remembers a private page unlock for this browser and the signed-in account
+  function grantPage(req, res, name) {
+    updateSession(req, res, s => {
+      s.p[name] = fingerprint(name);
+    });
+    const user = currentUser(req);
+    if (user) users.grantPage(user.username, name, fingerprint(name));
+  }
+
+  function revokePage(req, res, name) {
+    updateSession(req, res, s => {
+      delete s.p[name];
+    });
+    const user = currentUser(req);
+    if (user) users.revokePage(user.username, name);
   }
 
   // Updates the session cookie; stale grants (changed passwords) are dropped
@@ -309,7 +335,7 @@ function createApp(options = {}) {
       adminConfigured: passwords.has('admin'),
       files: canUseFiles(req),
       filesConfigured: passwords.has('files'),
-      unlocked: Object.keys(s.p).filter(page => s.p[page] === fingerprint(page))
+      unlocked: passwords.protectedPages().filter(page => hasUnlocked(req, page))
     });
   });
 
@@ -335,23 +361,31 @@ function createApp(options = {}) {
       limiter.recordFailure(req.ip);
       return res.status(401).json({ success: false, message: 'Incorrect password' });
     }
-    updateSession(req, res, s => {
-      if (scope === 'page') s.p[key] = fingerprint(key);
-      if (scope === 'files') s.f = fingerprint('files');
-      if (scope === 'admin') s.a = fingerprint('admin');
-    });
+    if (scope === 'page') {
+      grantPage(req, res, key);
+    } else {
+      updateSession(req, res, s => {
+        if (scope === 'files') s.f = fingerprint('files');
+        if (scope === 'admin') s.a = fingerprint('admin');
+      });
+    }
     res.json({ success: true });
   });
 
+  // Locks private pages again for you (this device and your account)
   app.post('/api/lock', (req, res) => {
     const { scope, page, all } = req.body || {};
+    const user = currentUser(req);
+    if (scope === 'page' && !all) {
+      revokePage(req, res, safeName(page));
+      return res.json({ success: true });
+    }
+    if (all && user) users.revokeAllPages(user.username);
     updateSession(req, res, s => {
       if (all) {
         s.p = {};
         s.f = null;
         s.a = null;
-      } else if (scope === 'page') {
-        delete s.p[safeName(page)];
       } else if (scope === 'files') {
         s.f = null;
       } else if (scope === 'admin') {
@@ -363,10 +397,14 @@ function createApp(options = {}) {
 
   // ---------- Pages ----------
 
+  // Every page. Private pages you haven't unlocked are listed by name only
+  // (locked: true), so people know they exist and can unlock them.
   app.get('/api/pages', (req, res) => {
     const pages = notes.list()
-      .filter(p => canAccessPage(req, p.name))
-      .map(p => ({ ...p, protected: isProtected(p.name) }))
+      .map(p => {
+        if (canAccessPage(req, p.name)) return { ...p, protected: isProtected(p.name), locked: false };
+        return { name: p.name, title: '', preview: '', tags: [], updatedAt: p.updatedAt, protected: true, locked: true };
+      })
       .sort((a, b) => (b.name === HOME_PAGE) - (a.name === HOME_PAGE) || b.updatedAt - a.updatedAt);
     res.set('Cache-Control', 'no-store').json(pages);
   });
@@ -391,7 +429,7 @@ function createApp(options = {}) {
       protected: isProt,
       // How you get in: 'public', 'password' (unlocked on this device) or
       // 'admin' (admins can open private pages without the password)
-      access: !isProt ? 'public' : (session(req).p[req.pageName] === fingerprint(req.pageName) ? 'password' : 'admin'),
+      access: !isProt ? 'public' : (hasUnlocked(req, req.pageName) ? 'password' : 'admin'),
       viewers: live.presence(req.pageName)
     });
   });
@@ -451,12 +489,14 @@ function createApp(options = {}) {
     notes.rename(from, to);
     const entry = passwords.getRaw(from);
     if (entry) {
+      const oldFingerprint = fingerprint(from);
       passwords.setRaw(to, entry);
       passwords.setRaw(from, null);
+      users.movePageGrants(from, to, oldFingerprint, fingerprint(to));
       updateSession(req, res, s => {
         delete s.p[from];
-        s.p[to] = fingerprint(to);
       });
+      grantPage(req, res, to);
     }
     shares.renamePage(from, to);
     live.broadcast(from, 'renamed', { to, by: by(req) });
@@ -483,10 +523,8 @@ function createApp(options = {}) {
       }
     }
     passwords.set(name, password);
-    updateSession(req, res, s => {
-      if (password === null) delete s.p[name];
-      else s.p[name] = fingerprint(name);
-    });
+    if (password === null) revokePage(req, res, name);
+    else grantPage(req, res, name);
     live.broadcast(name, 'protection', { protected: password !== null, by: by(req) });
     res.json({ success: true, protected: password !== null });
   });
@@ -672,9 +710,7 @@ function createApp(options = {}) {
     notes.restoreFromTrash(req.params.id, name);
     if (meta.passwordEntry) {
       passwords.setRaw(name, meta.passwordEntry);
-      updateSession(req, res, s => {
-        s.p[name] = fingerprint(name);
-      });
+      grantPage(req, res, name);
     }
     res.json({ success: true, name });
   });

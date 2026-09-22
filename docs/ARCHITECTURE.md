@@ -75,7 +75,7 @@ There are three independent layers:
 | Layer | Who decides | Stored in | Carried by |
 | --- | --- | --- | --- |
 | **Account** (sign-in) | admins, in Settings → People | `.noter/users.json` | session cookie `u` + `v` |
-| **Private page** (extra password) | anyone for new pages; admins for existing ones | `protected_pages.json` | session cookie `p[page]` |
+| **Private page** (extra password) | anyone for new pages; admins for existing ones | `protected_pages.json` | session cookie `p[page]` and the account's `unlocked[page]` in `users.json` |
 | **Admin** | admins | the `admin` flag on an account | the account |
 
 ### Session cookie
@@ -96,8 +96,14 @@ days. The payload:
   everywhere" all increase it. A cookie only counts while its `v` matches, so all
   of that person's sessions stop working immediately.
 - **Private page unlocks** store a fingerprint: an HMAC of the stored password
-  entry. Changing a page's password changes the fingerprint, which locks everyone
-  else out of that page.
+  entry. It is kept in the cookie and on the account (`users.json` →
+  `unlocked`), so an unlock follows the person to all their devices and survives
+  signing out. Changing a page's password changes the fingerprint, which locks
+  everyone else out of that page. Renaming a page carries valid unlocks over to
+  the new name.
+- **Locked private pages are listed** by `GET /api/pages` with `locked: true` and
+  their name only (no title, preview or tags), so people can find and unlock them;
+  their text is never searched.
 
 ### First-run setup
 
@@ -121,7 +127,7 @@ and restore are plain file copies.
 | Trash | `.noter/trash/<ms>-<name>/` | `note.txt`, `meta.json`, `history/`, `attachments/`; purged after 30 days |
 | Attachments | `attachments/<name>/<file>` | Move with the page on rename, delete and restore |
 | Share links | `.noter/shares.json` | `token → { page, createdAt, createdBy }` |
-| Accounts | `.noter/users.json` | `username → { name, hash, admin, version, createdAt }` |
+| Accounts | `.noter/users.json` | `username → { name, hash, admin, version, createdAt, unlocked }` |
 | Page passwords | `protected_pages.json` | Plain text (hand-written) or `scrypt$salt$hash` |
 
 Page names are limited to `[A-Za-z0-9_-]`, 100 characters. `files` and `admin`

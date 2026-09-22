@@ -82,12 +82,14 @@ export class Sidebar {
     }
     this.listEl.replaceChildren(...pages.map(page => {
       const title = page.title && page.title.toLowerCase() !== page.name.toLowerCase() ? page.title : page.name;
-      const meta = [title !== page.name ? page.name : null, timeAgo(page.updatedAt), page.updatedBy].filter(Boolean).join(' · ');
+      const meta = page.locked
+        ? 'Private · needs the password'
+        : [title !== page.name ? page.name : null, timeAgo(page.updatedAt), page.updatedBy].filter(Boolean).join(' · ');
       const link = el('a', {
-        class: `page-link${page.name === this.current ? ' active' : ''}`,
+        class: `page-link${page.name === this.current ? ' active' : ''}${page.locked ? ' locked' : ''}`,
         href: page.name === 'home' ? '/' : `/person/${encodeURIComponent(page.name)}`,
         dataset: { name: page.name },
-        title: page.preview || page.name
+        title: page.locked ? `${page.name} is private: open it and enter the password` : (page.preview || page.name)
       }, [
         el('div', { class: 'title' }, [el('span', { text: title }), page.protected ? icon('lock') : null]),
         el('div', { class: 'meta', text: meta })

@@ -110,6 +110,8 @@ export class PageView {
     const preferred = storage()?.getItem(`noter-mode:${name}`);
     this.mode = page.text.trim() === '' ? 'edit' : (preferred === 'edit' ? 'edit' : 'view');
     this.render();
+    // Empty page: put the cursor in the editor so typing just works
+    if (this.editor && page.text.trim() === '' && !document.querySelector('dialog[open]')) this.editor.focus();
     this.connect();
   }
 

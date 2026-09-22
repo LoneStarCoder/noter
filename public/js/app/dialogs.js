@@ -246,14 +246,14 @@ export async function showPrivacy(page, session) {
     el('p', { text: 'Other people need the password to see or edit this page, and it is hidden from their page list until they unlock it.' }),
     session.admin
       ? el('p', { text: 'You can always open it because you are an admin. To check what others see, sign in as a non-admin or open the page in a private browser window.' })
-      : el('p', { text: 'You can change or remove the password, or lock the page again on this device.' })
+      : el('p', { text: 'It stays unlocked for your account on every device. You can change or remove the password, or lock it again for yourself.' })
   ]);
   const choice = await modal({
     title: `${name} is private`,
     body,
     actions: [
       { label: 'Remove password', value: 'remove', danger: true },
-      session.admin ? null : { label: 'Lock on this device', value: 'lock' },
+      session.admin ? null : { label: 'Lock it again for me', value: 'lock' },
       { label: 'Change password', value: 'change', primary: true }
     ].filter(Boolean)
   });
@@ -455,6 +455,8 @@ export async function newPage(navigate, onChange) {
               }
               await post(`${pageUrl(name)}/password`, { password: passwordInput.value });
             }
+            // Create the (empty) page now so it exists and shows in the list
+            await api('PUT', pageUrl(name), { text: '' });
             created = name;
             return true;
           } catch (err) {
@@ -542,17 +544,17 @@ export async function showSettings(session, { onChange, onSessionChange, onSignO
         })
       ]),
       el('label', { class: 'field' }, ['Theme', themeSelect]),
-      el('h3', { text: 'This device' }),
-      el('p', { text: 'Private pages you unlock stay unlocked on this device for 30 days.' }),
+      el('h3', { text: 'Private pages' }),
+      el('p', { text: 'Private pages you unlock (or create) stay unlocked for your account on all your devices, until their password changes.' }),
       el('div', { class: 'share-url' }, [
         el('button', {
           class: 'btn',
           type: 'button',
-          text: 'Lock private pages here',
+          text: 'Lock all private pages again',
           onclick: async () => {
             await post('/api/lock', { all: true });
             if (window.caches) await caches.delete('noter-api');
-            toast('Private pages are locked on this device');
+            toast('Private pages are locked again for you');
             session = await onSessionChange();
             onChange();
           }

@@ -260,10 +260,11 @@ async function main() {
       (await A.isVisible('#page-lock-icon')) && (await A.locator('#page-info .private-badge').textContent()) === '🔒 Private');
     const listed = await waitFor(async () => (await A.locator('#page-list a[data-name="brody"]').count()) === 1);
     check('an unlocked private page appears in your sidebar', listed);
-    check('…but not in other people\'s', await (async () => {
+    check('…and shows locked (name only) in other people\'s', await (async () => {
       await B.goto(BASE + '/');
       await B.waitForSelector('#page-list a');
-      return (await B.locator('#page-list a[data-name="brody"]').count()) === 0;
+      const entry = B.locator('#page-list a.locked[data-name="brody"]');
+      return (await entry.count()) === 1 && /needs the password/.test(await entry.textContent()) && !/Brody private notes/.test(await entry.textContent());
     })());
 
     await A.click('#page-menu-btn');
@@ -288,6 +289,9 @@ async function main() {
     await A.click('dialog[open] .btn.primary');
     await A.waitForURL('**/person/gift-ideas');
     await A.waitForSelector('#editor');
+    check('a new private page exists and is in your sidebar right away (before typing)',
+      noteExists('gift-ideas') && await waitFor(async () => (await A.locator('#page-list a[data-name="gift-ideas"]:not(.locked)').count()) === 1));
+    check('the cursor is in the editor of a new page', await waitFor(() => A.evaluate(() => document.activeElement && document.activeElement.id === 'editor')));
     await A.keyboard.type('- [ ] a book for Bob');
     await saved(A);
     await B.goto(BASE + '/person/gift-ideas');
@@ -472,6 +476,20 @@ async function main() {
     await B.goto(BASE + '/person/beachlist');
     await B.waitForURL('**/login**');
     check('signing out locks the whole site again', true);
+
+    // ---- Your private pages stay unlocked for your account after signing in again
+    await A.click('#settings-btn');
+    await A.click('dialog[open] >> text=Sign out');
+    await A.waitForURL('**/login');
+    await A.fill('#login-username', 'alice');
+    await A.fill('#login-password', PASSWORD);
+    await A.click('#login-form button[type=submit]');
+    await A.waitForURL(BASE + '/');
+    const stillMine = await waitFor(async () => (await A.locator('#page-list a[data-name="gift-ideas"]:not(.locked)').count()) === 1);
+    await A.goto(BASE + '/person/gift-ideas');
+    await A.waitForSelector('#preview');
+    check('after signing out and in, your private page is still listed and opens without the password',
+      stillMine && /a book for Bob/.test(await A.textContent('#preview')));
 
     check('no unexpected console errors', consoleProblems.length === 0, consoleProblems.slice(0, 5).join(' | '));
   } catch (err) {
