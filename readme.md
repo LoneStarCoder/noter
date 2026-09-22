@@ -7,116 +7,101 @@ A simple web-based note-taking app with per-page password protection, persistent
 ## Features
 
 - Create, edit, and delete named note pages (e.g., `/person/brody`)
+- Autosave with a status indicator, and a warning if you leave with unsaved changes
+- Conflict detection: if a page changed elsewhere since you opened it, you choose whether to overwrite it or load the latest version (your text is downloaded as a backup)
 - Per-page password protection (optional, via `protected_pages.json`)
+- Password-protected file manager with folders, previews, uploads and downloads
 - Download/upload notes as `.txt` files
 - Light and dark themes (toggleable, persists in browser)
 - All notes stored as plain text files on the server
-- Responsive, minimal UI
 
 ---
 
 ## Project Structure
 
 ```
-.gitignore
-data.txt
+server.js              Express server (notes API, file manager API, security headers)
 package.json
-person_testers.txt
-readme.md
-server.js
-persistent/
-    brody.txt
+test/                  API tests (node:test), run with `npm test`
+persistent/            Data directory: notes (person_<name>.txt) and uploads/
 public/
-    dark.css
-    editor.html
-    index.html
-    style.css
+    index.html         Home page (the "home" note, page picker, create page)
+    editor.html        Editor for /person/<name>
+    files.html         File manager
+    blog.html          Static blog page
+    js/common.js       Shared helpers (safe link rendering, passwords, theme)
+    js/pad.js          Note loading/autosave logic used by home and editor
+    js/home.js         Home page picker / create page
+    js/files.js        File manager logic
+    style.css, dark.css, style_blog.css
 ```
 
-### File Descriptions
-
-#### [server.js](server.js)
-- Main Express server.
-- Serves static files from `public/`.
-- Handles dynamic routes for loading, saving, listing, and deleting note pages.
-- Supports per-page password protection via `protected_pages.json` (not included in repo).
-- Notes are stored as `person_<name>.txt` in the project root.
-
-#### [public/index.html](public/index.html)
-- Home page UI.
-- Lets users select or create note pages.
-- Loads and saves the "home" page by default.
-- Theme toggle and page navigation.
-
-#### [public/editor.html](public/editor.html)
-- Editor UI for individual note pages.
-- Loads/saves note content, with password prompt if protected.
-- Allows downloading/uploading `.txt` files.
-- Delete button for removing the current page (except protected ones).
-- Theme toggle.
-
-#### [public/style.css](public/style.css)
-- Main stylesheet for light theme and layout.
-
-#### [public/dark.css](public/dark.css)
-- Overrides for dark theme.
-
-#### [package.json](package.json)
-- Project metadata and dependencies (uses Express).
-
-#### [data.txt](data.txt), [person_testers.txt](person_testers.txt)
-- Example/test data files (not used by the app).
-
-#### [persistent/brody.txt](persistent/brody.txt)
-- Example persistent data file (not used by the app).
-
-#### [.gitignore](.gitignore)
-- Ignores all generated note files and `protected_pages.json`.
+All JavaScript lives in `public/js/`. The server sends a Content-Security-Policy
+that blocks inline scripts, so don't add `<script>` blocks or `onclick=` attributes
+to the HTML; add code to a file in `public/js/` instead.
 
 ---
 
 ## Usage
 
-### Install dependencies
-
 ```sh
 npm install
+npm start      # http://localhost:3000
+npm test       # run the API tests
 ```
-
-### Start the server
-
-```sh
-npm start
-```
-
-Server runs at [http://localhost:3000](http://localhost:3000).
-
-### Access the app
 
 - Home: [http://localhost:3000/](http://localhost:3000/)
-- Editor for a page: [http://localhost:3000/person/brody](http://localhost:3000/person/brody) (replace `brody` with any page name)
+- Editor for a page: [http://localhost:3000/person/brody](http://localhost:3000/person/brody)
+- Files: [http://localhost:3000/files.html](http://localhost:3000/files.html)
+
+### Configuration (environment variables)
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `3000` | Port to listen on |
+| `NOTER_DATA_DIR` | `./persistent` | Where notes and uploads are stored |
+| `NOTER_PASSWORDS_FILE` | *(see below)* | Path to `protected_pages.json` |
+| `NOTER_MAX_UPLOAD_MB` | `50` | Max size per uploaded file |
+| `NOTER_MAX_NOTE_SIZE` | `5mb` | Max size of a single note |
+| `TRUST_PROXY` | *(unset)* | Number of reverse proxies in front of the app (e.g. `1` on Render), so rate limiting sees real client IPs. Leave unset when not behind a proxy. |
 
 ---
 
 ## Password Protection
 
-To protect a page with a password, create a `protected_pages.json` file in the project root:
+Create a `protected_pages.json` file:
 
 ```json
 {
   "brody": "yourpassword",
-  "elizabeth": "anotherpassword"
+  "elizabeth": "anotherpassword",
+  "files": "file-manager-password"
 }
 ```
 
-- When accessing a protected page, users will be prompted for the password.
+The file is looked up in this order: `$NOTER_PASSWORDS_FILE`, then the data
+directory (`persistent/protected_pages.json`, which is what you want on a host with
+a persistent disk), then the project root. It is gitignored, so it must be created on
+the server. If the file contains invalid JSON the server refuses to start.
+
+- A protected page needs its password to be **read, saved, or deleted**. Protected
+  pages are not shown in the page list.
+- The **file manager is disabled** until a `"files"` password is set.
+- Passwords are sent in an `X-Noter-Password` header (never in the URL), and the
+  browser only remembers them for the current session.
+- After 10 wrong passwords from one IP within 15 minutes, further attempts are
+  refused until the window passes.
+- Pages without a password are public: anyone who can reach the site can read
+  and edit them.
 
 ---
 
 ## Notes Storage
 
-- Each note page is stored as `person_<name>.txt` in the `persistent/` directory.
-- The home page is stored as `person_home.txt` in the `persistent/` directory.
+- Each note page is stored as `person_<name>.txt` in the data directory; the home page is `person_home.txt`.
+- Page names may only contain letters, numbers, `-` and `_`, and are case-sensitive.
+- Uploaded files are stored in `uploads/` inside the data directory. Uploading a file
+  with an existing name keeps both (`name (1).ext`).
 
 ---
 
@@ -141,6 +126,21 @@ Brody Kilpatrick
 
 # Release Notes
 
+## v1.2.0
+
+### Security
+- Page passwords are now required to save and delete protected pages, not only to read them.
+- Passwords moved from URLs to a request header, compared in constant time, and rate-limited.
+- Fixed stored XSS in note link rendering and script injection through uploaded file names.
+- The file manager is disabled unless a `files` password is configured.
+- Upload size limits, no overwriting on upload, input validation (a malformed request could crash the server), security headers and CSP.
+- Upgraded multer to 2.x and express to 4.22.
+
+### Changed
+- Notes up to 5MB (was 100KB, which failed silently), autosave status, conflict detection, safe writes.
+- `node_modules/` is no longer committed; run `npm install`.
+- Added `npm test`.
+
 ## v1.1.0 (2025-05-20)
 
 ### Changed
@@ -164,6 +164,7 @@ To ensure your notes and data are not lost on redeploy or restart, configure a p
    - In your Render dashboard, go to your web service settings.
    - Under the "Disks" section, click "Add Disk".
    - Name the disk (e.g., `noter-data`), set the mount path to `/opt/render/project/src/persistent`, and choose a size (e.g., 1GB or more).
+   - Put `protected_pages.json` on the disk (`persistent/protected_pages.json`) via the Render Shell, and set the environment variable `TRUST_PROXY=1`.
 
 2. **Update Your Service**
    - Make sure your Render service uses the latest code (with all note files stored in `/persistent`).
@@ -173,7 +174,7 @@ To ensure your notes and data are not lost on redeploy or restart, configure a p
    - If you have existing note files, move them into the `/persistent` directory after the disk is mounted.
    - You can do this via the Render Shell or by uploading files.
 
-4. **No Further Configuration Needed**
+4. **Done**
    - The app will create the `/persistent` directory if it does not exist.
    - All note operations (create, read, update, delete, list) will use the persistent disk.
 

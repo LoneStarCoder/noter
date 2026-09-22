@@ -113,6 +113,18 @@ function sanitizeFileName(name) {
   return clean || 'file';
 }
 
+// Version tag for a note's content, used to detect conflicting edits
+function contentVersion(text) {
+  return crypto.createHash('sha256').update(text).digest('hex').slice(0, 16);
+}
+
+// Writes via a temp file + rename so a crash never leaves a half-written note
+function writeFileAtomic(file, data) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, file);
+}
+
 // Returns "name (1).ext", "name (2).ext", ... until the name is free
 function uniqueFileName(dir, fileName) {
   if (!fs.existsSync(path.join(dir, fileName))) return fileName;
@@ -130,6 +142,7 @@ function createApp(options = {}) {
   const protectedPages = normalizePasswords(options.passwords || loadProtectedPages(dataDir));
   const maxUploadBytes = options.maxUploadBytes || Number(process.env.NOTER_MAX_UPLOAD_MB || 50) * 1024 * 1024;
   const maxUploadFiles = options.maxUploadFiles || 20;
+  const maxNoteSize = options.maxNoteSize || process.env.NOTER_MAX_NOTE_SIZE || '5mb';
   const limiter = createFailureLimiter({
     maxFailures: options.maxPasswordFailures || 10,
     windowMs: options.failureWindowMs || 15 * 60 * 1000
@@ -139,6 +152,11 @@ function createApp(options = {}) {
 
   function getTextFile(name) {
     return path.join(dataDir, `person_${name}.txt`);
+  }
+
+  function readNote(name) {
+    const file = getTextFile(name);
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
   }
 
   // Returns a safe absolute path within uploadsDir, or null when the input is
@@ -239,7 +257,7 @@ function createApp(options = {}) {
     next();
   });
 
-  app.use(express.json());
+  app.use(express.json({ limit: maxNoteSize }));
   app.use(express.static(path.join(__dirname, 'public')));
 
   const pagePassword = checkPassword(req => req.pageName);
@@ -251,9 +269,9 @@ function createApp(options = {}) {
   });
 
   app.get('/load/:name', requirePageName, pagePassword, (req, res) => {
-    const file = getTextFile(req.pageName);
-    const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
-    res.set('Cache-Control', 'no-store').type('text/plain').send(text);
+    const text = readNote(req.pageName);
+    res.set({ 'Cache-Control': 'no-store', 'X-Note-Version': contentVersion(text) });
+    res.type('text/plain').send(text);
   });
 
   app.post('/save/:name', requirePageName, pagePassword, (req, res) => {
@@ -261,8 +279,16 @@ function createApp(options = {}) {
     if (!req.body || typeof req.body.text !== 'string') {
       return res.status(400).json({ success: false, message: 'Expected JSON body with a "text" string' });
     }
-    fs.writeFileSync(getTextFile(req.pageName), req.body.text);
-    res.sendStatus(200);
+    // If the client says which version it edited, refuse to clobber a newer one
+    const { baseVersion } = req.body;
+    if (typeof baseVersion === 'string') {
+      const currentVersion = contentVersion(readNote(req.pageName));
+      if (baseVersion !== currentVersion) {
+        return res.status(409).json({ success: false, message: 'Page was changed elsewhere', version: currentVersion });
+      }
+    }
+    writeFileAtomic(getTextFile(req.pageName), req.body.text);
+    res.json({ success: true, version: contentVersion(req.body.text) });
   });
 
   // Protected pages are left out so their names are not advertised
@@ -368,6 +394,9 @@ function createApp(options = {}) {
   app.use((err, req, res, next) => {
     let status = err.status || err.statusCode || 500;
     let message = status < 500 && err.expose !== false ? err.message : 'Internal server error';
+    if (err.type === 'entity.too.large') {
+      message = `Note too large (max ${maxNoteSize})`;
+    }
     if (err instanceof multer.MulterError) {
       status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
       message = err.code === 'LIMIT_FILE_SIZE'

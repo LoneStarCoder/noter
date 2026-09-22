@@ -4,8 +4,19 @@
   const pad = document.getElementById('pad');
   const name = document.body.dataset.page ||
     decodeURIComponent(window.location.pathname.split('/').pop()) || 'home';
+  const statusEl = document.getElementById('save-status');
   let password = Noter.getPassword(name);
   let saveTimer;
+  let version = null;       // version of the text last loaded from / saved to the server
+  let dirty = false;        // edits not yet saved
+  let saving = false;
+  let saveQueued = false;
+
+  function setStatus(text, isError) {
+    if (!statusEl) return;
+    statusEl.textContent = text;
+    statusEl.classList.toggle('error', Boolean(isError));
+  }
 
   function setEditable(editable) {
     pad.contentEditable = editable ? 'true' : 'false';
@@ -45,22 +56,98 @@
       return;
     }
 
+    version = res.headers.get('X-Note-Version');
     Noter.renderLinkified(pad, await res.text());
+    dirty = false;
+    setStatus('');
     setEditable(true);
   }
 
-  function savePad(text) {
-    return request(`/save/${encodeURIComponent(name)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text })
-    });
+  function downloadText(text, filename) {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  }
+
+  // The page changed elsewhere since we loaded it. Returns true to overwrite.
+  async function resolveConflict(myText) {
+    const overwrite = confirm(
+      'This page was changed somewhere else since you opened it.\n\n' +
+      'OK: keep YOUR version (replaces the other changes)\n' +
+      'Cancel: load the LATEST version (your text is downloaded as a backup file)'
+    );
+    if (overwrite) return true;
+    downloadText(myText, `person_${name}_backup.txt`);
+    await loadPad();
+    return false;
+  }
+
+  // Saves the pad. Only one save runs at a time; edits made meanwhile are
+  // saved right after. `force` skips the conflict check.
+  async function savePad(force = false) {
+    if (saving) {
+      saveQueued = true;
+      return;
+    }
+    saving = true;
+    dirty = false;
+    setStatus('Saving…');
+    const text = Noter.extractPlainText(pad);
+    let retry = false;
+    let retryForce = false;
+
+    try {
+      const body = { text };
+      if (version && !force) body.baseVersion = version;
+      const res = await request(`/save/${encodeURIComponent(name)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (res.ok) {
+        version = (await res.json()).version;
+        setStatus(dirty ? 'Unsaved changes' : 'Saved');
+      } else if (res.status === 409) {
+        dirty = true;
+        setStatus('Conflict: page changed elsewhere', true);
+        retry = retryForce = await resolveConflict(text);
+      } else if (res.status === 401) {
+        dirty = true;
+        setStatus('Not saved: password required', true);
+        retry = askPassword('Enter the password to save this page:');
+      } else {
+        dirty = true;
+        const data = await res.json().catch(() => ({}));
+        setStatus('Not saved: ' + (data.message || `error ${res.status}`), true);
+      }
+    } catch (err) {
+      dirty = true;
+      setStatus('Not saved: connection problem, retrying…', true);
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => savePad(force), 5000);
+    } finally {
+      saving = false;
+    }
+
+    if (retry || saveQueued) {
+      saveQueued = false;
+      return savePad(retryForce);
+    }
   }
 
   pad.addEventListener('input', () => {
     if (pad.contentEditable !== 'true') return;
+    dirty = true;
+    setStatus('Unsaved changes');
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => savePad(Noter.extractPlainText(pad)), 500);
+    saveTimer = setTimeout(() => savePad(), 500);
+  });
+
+  window.addEventListener('beforeunload', (e) => {
+    if (dirty || saving) e.preventDefault();
   });
 
   loadPad().catch(err => {
@@ -79,6 +166,7 @@
       if (!confirm('Are you sure you want to delete this page? This cannot be undone.')) return;
       const res = await request(`/delete/${encodeURIComponent(name)}`, { method: 'DELETE' });
       if (res.ok) {
+        dirty = false;
         alert('Page deleted.');
         window.location.href = '/';
       } else {
@@ -90,12 +178,7 @@
   const downloadBtn = document.getElementById('download-btn');
   if (downloadBtn) {
     downloadBtn.addEventListener('click', () => {
-      const blob = new Blob([Noter.extractPlainText(pad)], { type: 'text/plain' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `person_${name}.txt`;
-      link.click();
-      URL.revokeObjectURL(link.href);
+      downloadText(Noter.extractPlainText(pad), `person_${name}.txt`);
     });
   }
 
@@ -110,15 +193,12 @@
 
       const reader = new FileReader();
       reader.onload = async (e) => {
-        const text = e.target.result;
-        const res = await savePad(text);
-        if (res.ok) {
-          Noter.renderLinkified(pad, text);
-          setEditable(true);
-          alert('File uploaded and saved.');
-        } else {
-          alert('Failed to save the uploaded file.');
-        }
+        if (!confirm('Replace this page with the contents of the file?')) return;
+        Noter.renderLinkified(pad, e.target.result);
+        setEditable(true);
+        clearTimeout(saveTimer);
+        await savePad(true);
+        uploadInput.value = '';
       };
       reader.readAsText(file);
     });
