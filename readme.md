@@ -125,15 +125,20 @@ so that nobody who finds the site before you can make themselves admin. (If
   at least one admin, and you can't remove yourself.
 
 ### Pages
-- **New page:** the **+** in the sidebar (or Alt+N). Tick *Private* to give it a password.
+- **New page:** the **+** in the sidebar (or Alt+N). Tick *Private* to give it a
+  password. The page is created straight away and appears in the sidebar.
 - **View / Edit:** the toggle at the top right, Ctrl+E, or double-click the page.
 - Changes save automatically; the status next to the toggle shows *Saved*.
 - **Page menu (⋯):** History, Share read-only link, Make private / Password,
   Attach files, Rename, Replace with a file, Download as Markdown, Print, Delete.
 
 ### Private pages
-- Private pages are hidden from the sidebar until you unlock them. Open one with
-  Ctrl+K and type its name, or go to `/person/<name>`.
+- Private pages appear in everyone's sidebar with a 🔒 and *Private · needs the
+  password*: only the name is shown, never the contents. Open one and enter its
+  password.
+- Once you unlock (or create) a private page, it stays unlocked **for your
+  account** on all your devices, even after signing out, until its password
+  changes. Page menu → *Password & privacy* → *Lock it again for me* undoes that.
 - Anyone can make a **new or empty** page private. Only admins can lock an existing
   shared page, so nobody gets locked out of a page they already use.
 - Private pages show a 🔒 icon and a **Private** label. Admins can open every page
@@ -303,6 +308,12 @@ The design and the reasons behind it are in [docs/ARCHITECTURE.md](docs/ARCHITEC
 ---
 
 ## Release notes
+
+### v2.1.1: Private pages fixes
+- Private pages are listed for everyone with a lock (name only), so they can be found and unlocked.
+- Unlocks are remembered on your account across devices and sign-outs.
+- New pages are created immediately; the cursor starts in the editor.
+- The lock icon shows on private pages; admins see *Private · open to you as admin*.
 
 ### v2.1.0: Accounts
 - The whole site requires signing in with individual accounts. First run shows a

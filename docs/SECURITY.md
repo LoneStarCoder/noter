@@ -10,6 +10,7 @@ control listed here has automated tests in `test/security.test.js`,
 | --- | --- | --- | --- | --- |
 | Sign-in page, share links (`/s/…`) | ✅ | ✅ | ✅ | ✅ |
 | Read and edit public pages | ❌ | ✅ | ✅ | ✅ |
+| See that a private page exists (its name) | ❌ | ✅ | ✅ | ✅ |
 | Read and edit a private page | ❌ | ❌ | ✅ | ✅ |
 | Create pages, make a new page private | ❌ | ✅ | ✅ | ✅ |
 | Lock an existing shared page | ❌ | ❌ | ❌ | ✅ |
@@ -108,6 +109,13 @@ control listed here has automated tests in `test/security.test.js`,
   but there are no per-page permissions beyond private-page passwords.
 - **Admins can see everything,** including private pages and full backups, which
   contain the password hashes.
+- **Private page names are visible** to every signed-in person (the sidebar lists
+  them with a lock so people can find and unlock them). Contents, titles, previews
+  and tags are not shown, and locked pages are excluded from search. Choose page
+  names accordingly.
+- **Unlocks last until the password changes.** Unlocking a private page remembers
+  it on your account, across devices and sign-outs, until the page's password
+  changes or you choose *Lock it again for me*.
 - **Page names can be claimed.** Anyone can make a *new* page name private before
   someone else uses it. An admin can remove the password.
 - **No two-factor sign-in and no password-reset email.** Admins reset passwords by
