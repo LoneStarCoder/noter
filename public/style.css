@@ -186,3 +186,15 @@ input, button, select {
     font-size: 1.2rem;
   }
 }
+
+/* Autosave indicator */
+.save-status {
+  margin-left: 0.5rem;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.save-status.error {
+  color: #c00;
+  font-weight: bold;
+}
