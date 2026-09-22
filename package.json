@@ -1,17 +1,24 @@
 {
   "name": "noter",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "main": "server.js",
   "scripts": {
+    "start": "node server.js",
     "test": "node --test test/*.test.js",
-    "start": "node server.js"
+    "test:e2e": "node test/e2e/app.e2e.js"
   },
   "dependencies": {
+    "dompurify": "^3.4.15",
     "express": "^4.22.3",
-    "multer": "^2.4.0"
+    "marked": "^18.0.14",
+    "multer": "^2.4.0",
+    "node-diff3": "^3.2.1"
   },
   "author": "Brody Kilpatrick",
   "license": "ISC",
-  "description": "Save your notes on noter.",
-  "keywords": []
+  "description": "A shared notebook: live collaborative Markdown notes with history, search and private pages.",
+  "keywords": [],
+  "engines": {
+    "node": ">=18"
+  }
 }

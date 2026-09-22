@@ -4,163 +4,615 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 
-const PASSWORD_HEADER = 'x-noter-password';
-const MAX_PAGE_NAME_LENGTH = 100;
-const MAX_FILE_NAME_LENGTH = 200;
+const { safeName, sanitizeFileName, uniqueFileName, cleanDisplayName } = require('./lib/util');
+const { PasswordStore, RESERVED_KEYS, verifyPassword } = require('./lib/passwords');
+const { createSessions } = require('./lib/session');
+const { createFailureLimiter } = require('./lib/limiter');
+const { NoteStore } = require('./lib/notes');
+const { ShareStore } = require('./lib/shares');
+const { createLiveHub } = require('./lib/live');
+const { createBackups, fullBackupEntries } = require('./lib/backups');
+const { writeZip } = require('./lib/zip');
+
 const TEXT_PREVIEW_PATTERN = /\.(txt|md|csv|json|xml|html|css|js|py|sh|yml|yaml|log)$/i;
+const INLINE_IMAGE_PATTERN = /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i;
+const HOME_PAGE = 'home';
+const MIN_PASSWORD_LENGTH = 4;
+const PUBLIC_DIR = path.join(__dirname, 'public');
 
-// Pages that can never be deleted through the API
-const UNDELETABLE_PAGES = ['home'];
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data: blob: https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
-// Looks for protected_pages.json in (1) $NOTER_PASSWORDS_FILE, (2) the data dir
-// (so it can live on a persistent disk), (3) the project root.
-function loadProtectedPages(dataDir) {
-  const candidates = [
-    process.env.NOTER_PASSWORDS_FILE,
-    path.join(dataDir, 'protected_pages.json'),
-    path.join(__dirname, 'protected_pages.json')
-  ].filter(Boolean);
-
-  const file = candidates.find(f => fs.existsSync(f));
-  if (!file) {
-    console.warn('No protected_pages.json found: all pages are public and the file manager is disabled.');
-    return {};
-  }
-  // Invalid JSON throws on purpose: better to refuse to start than to run unprotected.
-  return JSON.parse(fs.readFileSync(file, 'utf-8'));
+// Secret for signing session cookies: $NOTER_SECRET or generated once and
+// kept in the data dir so sessions survive restarts.
+function loadSecret(dataDir) {
+  if (process.env.NOTER_SECRET) return process.env.NOTER_SECRET;
+  const file = path.join(dataDir, '.noter', 'secret');
+  if (fs.existsSync(file)) return fs.readFileSync(file, 'utf-8').trim();
+  const secret = crypto.randomBytes(32).toString('hex');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, secret, { mode: 0o600 });
+  return secret;
 }
 
-// Copies only string values into a prototype-less object, so names like
-// "__proto__" or "constructor" can never resolve to something truthy.
-function normalizePasswords(raw) {
-  const result = Object.create(null);
-  for (const [key, value] of Object.entries(raw || {})) {
-    if (typeof value === 'string' && value !== '') result[key] = value;
-  }
-  return result;
-}
-
-// Constant-time comparison (hashing first makes the lengths equal)
-function passwordMatches(supplied, required) {
-  if (typeof supplied !== 'string') return false;
-  const a = crypto.createHash('sha256').update(supplied).digest();
-  const b = crypto.createHash('sha256').update(required).digest();
-  return crypto.timingSafeEqual(a, b);
-}
-
-// Passwords are sent URI-encoded because header values must be Latin-1
-function readPasswordHeader(req) {
-  const raw = req.get(PASSWORD_HEADER);
-  if (typeof raw !== 'string') return null;
-  try {
-    return decodeURIComponent(raw);
-  } catch (err) {
-    return null;
-  }
-}
-
-// Counts failed password attempts per client IP within a sliding window
-function createFailureLimiter({ maxFailures, windowMs }) {
-  const failures = new Map();
-
-  function prune(now) {
-    for (const [ip, entry] of failures) {
-      if (entry.resetAt <= now) failures.delete(ip);
-    }
-  }
-  setInterval(() => prune(Date.now()), windowMs).unref();
-
-  return {
-    isBlocked(ip) {
-      const entry = failures.get(ip);
-      return Boolean(entry && entry.resetAt > Date.now() && entry.count >= maxFailures);
-    },
-    recordFailure(ip) {
-      const now = Date.now();
-      const entry = failures.get(ip);
-      if (!entry || entry.resetAt <= now) {
-        failures.set(ip, { count: 1, resetAt: now + windowMs });
-      } else {
-        entry.count++;
-      }
-    }
-  };
-}
-
-// Returns the sanitized page name, or '' when nothing usable is left
-function getSafeName(name) {
-  if (typeof name !== 'string') return '';
-  return name.replace(/[^a-z0-9_\-]/gi, '').slice(0, MAX_PAGE_NAME_LENGTH);
-}
-
-function sanitizeFolderName(name) {
-  if (typeof name !== 'string') return '';
-  return name.replace(/[^a-z0-9_\-]/gi, '').slice(0, MAX_PAGE_NAME_LENGTH);
-}
-
-// Strips path separators, control and shell/HTML-special characters from an
-// uploaded file name and keeps it at a sane length.
-function sanitizeFileName(name) {
-  let clean = String(name || '')
-    .normalize('NFC')
-    .replace(/[\x00-\x1f\x7f<>:"/\\|?*]/g, '_')
-    .replace(/^[\s.]+/, '')
-    .trim();
-  if (clean.length > MAX_FILE_NAME_LENGTH) {
-    const ext = path.extname(clean).slice(0, 20);
-    clean = clean.slice(0, MAX_FILE_NAME_LENGTH - ext.length) + ext;
-  }
-  return clean || 'file';
-}
-
-// Version tag for a note's content, used to detect conflicting edits
-function contentVersion(text) {
-  return crypto.createHash('sha256').update(text).digest('hex').slice(0, 16);
-}
-
-// Writes via a temp file + rename so a crash never leaves a half-written note
-function writeFileAtomic(file, data) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, data);
-  fs.renameSync(tmp, file);
-}
-
-// Returns "name (1).ext", "name (2).ext", ... until the name is free
-function uniqueFileName(dir, fileName) {
-  if (!fs.existsSync(path.join(dir, fileName))) return fileName;
-  const ext = path.extname(fileName);
-  const base = fileName.slice(0, fileName.length - ext.length);
-  for (let i = 1; ; i++) {
-    const candidate = `${base} (${i})${ext}`;
-    if (!fs.existsSync(path.join(dir, candidate))) return candidate;
-  }
+function httpError(status, message, extra) {
+  return Object.assign(new Error(message), { status, expose: true, extra });
 }
 
 function createApp(options = {}) {
   const dataDir = options.dataDir || process.env.NOTER_DATA_DIR || path.join(__dirname, 'persistent');
   const uploadsDir = path.join(dataDir, 'uploads');
-  const protectedPages = normalizePasswords(options.passwords || loadProtectedPages(dataDir));
-  const maxUploadBytes = options.maxUploadBytes || Number(process.env.NOTER_MAX_UPLOAD_MB || 50) * 1024 * 1024;
-  const maxUploadFiles = options.maxUploadFiles || 20;
-  const maxNoteSize = options.maxNoteSize || process.env.NOTER_MAX_NOTE_SIZE || '5mb';
+  fs.mkdirSync(uploadsDir, { recursive: true });
+
+  const secret = options.secret || loadSecret(dataDir);
+  const passwords = new PasswordStore({ dataDir, initial: options.passwords });
+  const sessions = createSessions(secret);
+  const notes = new NoteStore(dataDir);
+  const shares = new ShareStore(dataDir);
+  const live = createLiveHub();
+  const backups = createBackups(dataDir);
   const limiter = createFailureLimiter({
     maxFailures: options.maxPasswordFailures || 10,
     windowMs: options.failureWindowMs || 15 * 60 * 1000
   });
+  const maxUploadBytes = options.maxUploadBytes || Number(process.env.NOTER_MAX_UPLOAD_MB || 50) * 1024 * 1024;
+  const maxUploadFiles = options.maxUploadFiles || 20;
+  const maxNoteSize = options.maxNoteSize || process.env.NOTER_MAX_NOTE_SIZE || '5mb';
 
-  fs.mkdirSync(uploadsDir, { recursive: true });
-
-  function getTextFile(name) {
-    return path.join(dataDir, `person_${name}.txt`);
+  if (options.backgroundJobs) {
+    backups.schedule();
+    notes.purgeExpiredTrash();
+    setInterval(() => notes.purgeExpiredTrash(), 6 * 60 * 60 * 1000).unref();
   }
 
-  function readNote(name) {
-    const file = getTextFile(name);
-    return fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
+  // ---------- Access control ----------
+
+  const fingerprint = key => passwords.fingerprint(key, secret);
+
+  function session(req) {
+    if (!req.noterSession) req.noterSession = sessions.read(req);
+    return req.noterSession;
   }
 
-  // Returns a safe absolute path within uploadsDir, or null when the input is
-  // not a string or tries to escape it.
+  function isAdmin(req) {
+    return passwords.has('admin') && session(req).a === fingerprint('admin');
+  }
+
+  function canUseFiles(req) {
+    return isAdmin(req) || (passwords.has('files') && session(req).f === fingerprint('files'));
+  }
+
+  function isProtected(name) {
+    return passwords.has(name);
+  }
+
+  function canAccessPage(req, name) {
+    if (!isProtected(name) || isAdmin(req)) return true;
+    return session(req).p[name] === fingerprint(name);
+  }
+
+  // Updates the session cookie; stale grants (changed passwords) are dropped
+  function updateSession(req, res, change) {
+    const current = session(req);
+    change(current);
+    for (const [page, fp] of Object.entries(current.p)) {
+      if (fp !== fingerprint(page)) delete current.p[page];
+    }
+    if (current.f && current.f !== fingerprint('files')) current.f = null;
+    if (current.a && current.a !== fingerprint('admin')) current.a = null;
+    sessions.write(req, res, current);
+  }
+
+  function by(req) {
+    return cleanDisplayName(req.get('X-Noter-User'));
+  }
+
+  // ---------- Middleware ----------
+
+  const app = express();
+  app.disable('x-powered-by');
+  if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY);
+
+  app.use((req, res, next) => {
+    res.set({
+      'Content-Security-Policy': CSP,
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer'
+    });
+    next();
+  });
+
+  // CSRF defence for cookie auth: state-changing requests must carry a custom
+  // header (forces a CORS preflight) and, if the browser sends an Origin, it
+  // must be ours. Session cookies are also SameSite=Strict.
+  app.use((req, res, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+    if (req.get('X-Noter') !== '1') {
+      return res.status(403).json({ success: false, message: 'Missing X-Noter header' });
+    }
+    const origin = req.get('Origin');
+    if (origin && origin !== 'null') {
+      let host;
+      try {
+        host = new URL(origin).host;
+      } catch (err) {
+        host = null;
+      }
+      if (host !== req.get('Host')) return res.status(403).json({ success: false, message: 'Cross-origin request' });
+    }
+    next();
+  });
+
+  app.use(express.json({ limit: maxNoteSize }));
+
+  function pageParam(req, res, next) {
+    const name = safeName(req.params.name);
+    if (!name) return next(httpError(400, 'Invalid page name'));
+    if (RESERVED_KEYS.includes(name.toLowerCase())) return next(httpError(400, `"${name}" is a reserved name`));
+    req.pageName = name;
+    next();
+  }
+
+  function requirePageAccess(req, res, next) {
+    if (!canAccessPage(req, req.pageName)) {
+      return res.status(401).json({ success: false, locked: true, message: 'This page is password protected' });
+    }
+    next();
+  }
+
+  function requireAdmin(req, res, next) {
+    if (!passwords.has('admin')) return next(httpError(403, 'No admin password is configured'));
+    if (!isAdmin(req)) return res.status(401).json({ success: false, message: 'Admin access required' });
+    next();
+  }
+
+  function requireFiles(req, res, next) {
+    if (!passwords.has('files') && !isAdmin(req)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Disabled: set a "files" password in protected_pages.json to enable this.'
+      });
+    }
+    if (!canUseFiles(req)) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    next();
+  }
+
+  // ---------- Static pages ----------
+
+  const vendor = {
+    'marked.esm.js': path.join(path.dirname(require.resolve('marked')), 'marked.esm.js'),
+    'purify.es.mjs': path.join(path.dirname(require.resolve('dompurify')), 'purify.es.mjs'),
+    'diff3.mjs': path.join(path.dirname(require.resolve('node-diff3')), 'diff3.mjs')
+  };
+  app.get('/vendor/:file', (req, res, next) => {
+    const file = vendor[req.params.file];
+    if (!file) return next();
+    res.type('application/javascript').sendFile(file, { maxAge: '1d' });
+  });
+
+  app.get(['/person/:name', '/p/:name'], (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
+  app.get('/s/:token', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'share.html')));
+  app.use(express.static(PUBLIC_DIR));
+
+  // ---------- Session / unlock ----------
+
+  app.get('/api/session', (req, res) => {
+    const s = session(req);
+    res.json({
+      admin: isAdmin(req),
+      adminConfigured: passwords.has('admin'),
+      files: canUseFiles(req),
+      filesConfigured: passwords.has('files'),
+      unlocked: Object.keys(s.p).filter(page => s.p[page] === fingerprint(page))
+    });
+  });
+
+  app.post('/api/unlock', (req, res, next) => {
+    const { scope, password } = req.body || {};
+    if (typeof password !== 'string' || !password) return next(httpError(400, 'Password required'));
+    let key;
+    if (scope === 'page') {
+      key = safeName(req.body.page);
+      if (!key || RESERVED_KEYS.includes(key)) return next(httpError(400, 'Invalid page name'));
+      if (!isProtected(key)) return res.json({ success: true });
+    } else if (scope === 'files' || scope === 'admin') {
+      key = scope;
+      if (!passwords.has(key)) return next(httpError(403, `No ${scope} password is configured`));
+    } else {
+      return next(httpError(400, 'Invalid scope'));
+    }
+
+    if (limiter.isBlocked(req.ip)) {
+      return res.status(429).json({ success: false, message: 'Too many failed attempts. Try again later.' });
+    }
+    if (!passwords.verify(key, password)) {
+      limiter.recordFailure(req.ip);
+      return res.status(401).json({ success: false, message: 'Incorrect password' });
+    }
+    updateSession(req, res, s => {
+      if (scope === 'page') s.p[key] = fingerprint(key);
+      if (scope === 'files') s.f = fingerprint('files');
+      if (scope === 'admin') s.a = fingerprint('admin');
+    });
+    res.json({ success: true });
+  });
+
+  app.post('/api/lock', (req, res) => {
+    const { scope, page, all } = req.body || {};
+    updateSession(req, res, s => {
+      if (all) {
+        s.p = {};
+        s.f = null;
+        s.a = null;
+      } else if (scope === 'page') {
+        delete s.p[safeName(page)];
+      } else if (scope === 'files') {
+        s.f = null;
+      } else if (scope === 'admin') {
+        s.a = null;
+      }
+    });
+    res.json({ success: true });
+  });
+
+  // ---------- Pages ----------
+
+  app.get('/api/pages', (req, res) => {
+    const pages = notes.list()
+      .filter(p => canAccessPage(req, p.name))
+      .map(p => ({ ...p, protected: isProtected(p.name) }))
+      .sort((a, b) => (b.name === HOME_PAGE) - (a.name === HOME_PAGE) || b.updatedAt - a.updatedAt);
+    res.set('Cache-Control', 'no-store').json(pages);
+  });
+
+  app.get('/api/search', (req, res) => {
+    const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 200) : '';
+    const names = notes.list().map(p => p.name).filter(name => canAccessPage(req, name));
+    res.set('Cache-Control', 'no-store').json(notes.search(names, q));
+  });
+
+  app.get('/api/pages/:name', pageParam, requirePageAccess, (req, res) => {
+    const page = notes.read(req.pageName);
+    const isProt = isProtected(req.pageName);
+    res.set({ 'Cache-Control': 'no-store', 'X-Noter-Protected': isProt ? '1' : '0' });
+    res.json({
+      name: req.pageName,
+      text: page.text,
+      version: page.version,
+      updatedAt: page.updatedAt,
+      updatedBy: page.updatedBy,
+      exists: page.exists,
+      protected: isProt,
+      viewers: live.presence(req.pageName)
+    });
+  });
+
+  app.put('/api/pages/:name', pageParam, requirePageAccess, (req, res, next) => {
+    const { text, baseVersion, force, snapshot } = req.body || {};
+    // Rejecting non-JSON bodies also stops cross-site form posts from blanking a page
+    if (typeof text !== 'string') return next(httpError(400, 'Expected JSON body with a "text" string'));
+    const result = notes.save(req.pageName, text, {
+      baseVersion: typeof baseVersion === 'string' ? baseVersion : undefined,
+      force: force === true,
+      snapshot: snapshot === true,
+      by: by(req)
+    });
+    if (result.status === 'conflict') {
+      return res.status(409).json({
+        success: false,
+        conflict: true,
+        message: 'Page was changed by someone else',
+        text: result.current.text,
+        version: result.current.version,
+        updatedBy: result.current.updatedBy,
+        bothText: result.bothText
+      });
+    }
+    if (!result.unchanged) {
+      live.broadcast(req.pageName, 'update', {
+        version: result.version,
+        by: by(req),
+        clientId: req.get('X-Noter-Client') || ''
+      });
+    }
+    res.json({ success: true, version: result.version, merged: result.merged, text: result.merged ? result.text : undefined });
+  });
+
+  app.delete('/api/pages/:name', pageParam, requirePageAccess, (req, res, next) => {
+    const name = req.pageName;
+    if (name === HOME_PAGE) return next(httpError(403, 'The home page cannot be deleted'));
+    if (!notes.exists(name)) return next(httpError(404, 'Page not found'));
+    const passwordEntry = passwords.getRaw(name);
+    const trashId = notes.trash(name, { by: by(req), passwordEntry });
+    if (passwordEntry) passwords.setRaw(name, null);
+    shares.removePage(name);
+    live.broadcast(name, 'deleted', { by: by(req) });
+    res.json({ success: true, trashId });
+  });
+
+  app.post('/api/pages/:name/rename', pageParam, requirePageAccess, (req, res, next) => {
+    const from = req.pageName;
+    const to = safeName(req.body && req.body.to);
+    if (from === HOME_PAGE) return next(httpError(403, 'The home page cannot be renamed'));
+    if (!to || RESERVED_KEYS.includes(to.toLowerCase())) return next(httpError(400, 'Invalid new name'));
+    if (!notes.exists(from)) return next(httpError(404, 'Page not found'));
+    if (to === from) return res.json({ success: true, name: to });
+    if (notes.exists(to) || isProtected(to)) return next(httpError(409, `A page named "${to}" already exists`));
+
+    notes.rename(from, to);
+    const entry = passwords.getRaw(from);
+    if (entry) {
+      passwords.setRaw(to, entry);
+      passwords.setRaw(from, null);
+      updateSession(req, res, s => {
+        delete s.p[from];
+        s.p[to] = fingerprint(to);
+      });
+    }
+    shares.renamePage(from, to);
+    live.broadcast(from, 'renamed', { to, by: by(req) });
+    res.json({ success: true, name: to });
+  });
+
+  // Set, change or remove (password: null) a page password.
+  // Anyone may make a new or empty page private; locking an existing public
+  // page with content needs the admin, so nobody can lock others out.
+  app.post('/api/pages/:name/password', pageParam, requirePageAccess, (req, res, next) => {
+    const name = req.pageName;
+    const { password } = req.body || {};
+    if (password !== null && (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH || password.length > 200)) {
+      return next(httpError(400, `Passwords must be at least ${MIN_PASSWORD_LENGTH} characters`));
+    }
+    if (name === HOME_PAGE && password !== null && !isAdmin(req)) {
+      return next(httpError(403, 'Only the admin can lock the home page'));
+    }
+    if (!isProtected(name)) {
+      if (password === null) return res.json({ success: true, protected: false });
+      const current = notes.read(name);
+      if (current.exists && current.text.trim() !== '' && !isAdmin(req)) {
+        return next(httpError(403, 'Only the admin can lock an existing page. New pages can be made private when created.'));
+      }
+    }
+    passwords.set(name, password);
+    updateSession(req, res, s => {
+      if (password === null) delete s.p[name];
+      else s.p[name] = fingerprint(name);
+    });
+    live.broadcast(name, 'protection', { protected: password !== null, by: by(req) });
+    res.json({ success: true, protected: password !== null });
+  });
+
+  // ---------- History ----------
+
+  app.get('/api/pages/:name/history', pageParam, requirePageAccess, (req, res) => {
+    const entries = notes.listHistory(req.pageName).map(({ file, ...entry }) => entry);
+    res.set('Cache-Control', 'no-store').json(entries);
+  });
+
+  app.get('/api/pages/:name/history/:id', pageParam, requirePageAccess, (req, res, next) => {
+    const entry = notes.readHistory(req.pageName, req.params.id);
+    if (!entry) return next(httpError(404, 'Version not found'));
+    const { file, ...rest } = entry;
+    res.set('Cache-Control', 'no-store').json(rest);
+  });
+
+  app.post('/api/pages/:name/restore', pageParam, requirePageAccess, (req, res, next) => {
+    const result = notes.restore(req.pageName, String((req.body && req.body.id) || ''), by(req));
+    if (!result) return next(httpError(404, 'Version not found'));
+    live.broadcast(req.pageName, 'update', { version: result.version, by: by(req), clientId: req.get('X-Noter-Client') || '' });
+    res.json({ success: true, version: result.version, text: result.text });
+  });
+
+  // ---------- Attachments ----------
+
+  function attachmentUpload(dirFor) {
+    return multer({
+      storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+          try {
+            const dir = dirFor(req);
+            fs.mkdirSync(dir, { recursive: true });
+            cb(null, dir);
+          } catch (err) {
+            cb(err);
+          }
+        },
+        // Names are reserved per request: files in one upload are written
+        // concurrently, so the disk alone can't tell us a name is taken.
+        filename: (req, file, cb) => {
+          req.reservedNames = req.reservedNames || new Set();
+          const name = uniqueFileName(dirFor(req), sanitizeFileName(file.originalname), req.reservedNames);
+          req.reservedNames.add(name);
+          cb(null, name);
+        }
+      }),
+      defParamCharset: 'utf8',
+      limits: { fileSize: maxUploadBytes, files: maxUploadFiles, fields: 10, parts: maxUploadFiles + 10 }
+    });
+  }
+
+  const pageAttachmentUpload = attachmentUpload(req => notes.attachmentsDir(req.pageName));
+
+  function attachmentUrl(page, file) {
+    return `/api/pages/${encodeURIComponent(page)}/attachments/${encodeURIComponent(file)}`;
+  }
+
+  function resolveAttachment(dir, rawName) {
+    const file = path.basename(String(rawName || ''));
+    if (!file || file === '.' || file === '..') return null;
+    const full = path.join(dir, file);
+    return fs.existsSync(full) && fs.statSync(full).isFile() ? { file, full } : null;
+  }
+
+  // Serves an uploaded file safely: sandboxed, and only images inline
+  function sendUserFile(res, full, file) {
+    res.set('Content-Security-Policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'");
+    if (INLINE_IMAGE_PATTERN.test(file)) {
+      res.set('Cache-Control', 'private, max-age=3600');
+      return res.sendFile(full);
+    }
+    res.download(full, file);
+  }
+
+  app.get('/api/pages/:name/attachments', pageParam, requirePageAccess, (req, res) => {
+    const dir = notes.attachmentsDir(req.pageName);
+    const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => !f.endsWith('.tmp')) : [];
+    res.json(files.map(name => ({
+      name,
+      size: fs.statSync(path.join(dir, name)).size,
+      url: attachmentUrl(req.pageName, name)
+    })));
+  });
+
+  app.post('/api/pages/:name/attachments', pageParam, requirePageAccess, pageAttachmentUpload.array('files'), (req, res, next) => {
+    if (!req.files || req.files.length === 0) return next(httpError(400, 'No files provided'));
+    res.json({
+      success: true,
+      files: req.files.map(f => ({ name: f.filename, size: f.size, url: attachmentUrl(req.pageName, f.filename) }))
+    });
+  });
+
+  app.get('/api/pages/:name/attachments/:file', pageParam, requirePageAccess, (req, res, next) => {
+    const found = resolveAttachment(notes.attachmentsDir(req.pageName), req.params.file);
+    if (!found) return next(httpError(404, 'Attachment not found'));
+    sendUserFile(res, found.full, found.file);
+  });
+
+  app.delete('/api/pages/:name/attachments/:file', pageParam, requirePageAccess, (req, res, next) => {
+    const found = resolveAttachment(notes.attachmentsDir(req.pageName), req.params.file);
+    if (!found) return next(httpError(404, 'Attachment not found'));
+    fs.unlinkSync(found.full);
+    res.json({ success: true });
+  });
+
+  // ---------- Share links ----------
+
+  app.get('/api/pages/:name/shares', pageParam, requirePageAccess, (req, res) => {
+    res.json(shares.forPage(req.pageName).map(s => ({ ...s, url: `/s/${s.token}` })));
+  });
+
+  app.post('/api/pages/:name/shares', pageParam, requirePageAccess, (req, res, next) => {
+    if (!notes.exists(req.pageName)) return next(httpError(404, 'Save the page before sharing it'));
+    const token = shares.create(req.pageName, by(req));
+    res.json({ success: true, token, url: `/s/${token}` });
+  });
+
+  app.delete('/api/shares/:token', (req, res, next) => {
+    const share = shares.get(req.params.token);
+    if (!share) return next(httpError(404, 'Share link not found'));
+    if (!canAccessPage(req, share.page)) return res.status(401).json({ success: false, locked: true });
+    shares.revoke(req.params.token);
+    res.json({ success: true });
+  });
+
+  function requireShare(req, res, next) {
+    const share = shares.get(req.params.token);
+    if (!share || !notes.exists(share.page)) return next(httpError(404, 'This link is no longer valid'));
+    req.share = share;
+    next();
+  }
+
+  app.get('/api/share/:token', requireShare, (req, res) => {
+    const page = notes.read(req.share.page);
+    res.set('Cache-Control', 'no-store').json({
+      name: req.share.page,
+      text: page.text,
+      updatedAt: page.updatedAt,
+      updatedBy: page.updatedBy
+    });
+  });
+
+  app.get('/api/share/:token/attachments/:file', requireShare, (req, res, next) => {
+    const found = resolveAttachment(notes.attachmentsDir(req.share.page), req.params.file);
+    if (!found) return next(httpError(404, 'Attachment not found'));
+    sendUserFile(res, found.full, found.file);
+  });
+
+  // ---------- Live updates ----------
+
+  app.get('/api/pages/:name/events', pageParam, requirePageAccess, (req, res) => {
+    const clientId = typeof req.query.client === 'string' ? req.query.client.slice(0, 40) : '';
+    const user = cleanDisplayName(req.query.user) || 'Someone';
+    if (!live.join(req, res, req.pageName, { clientId, user })) {
+      res.status(503).json({ success: false, message: 'Too many live connections' });
+    }
+  });
+
+  // ---------- Trash ----------
+
+  app.get('/api/trash', (req, res) => {
+    const admin = isAdmin(req);
+    res.set('Cache-Control', 'no-store').json(notes.listTrash().filter(entry => admin || !entry.protected));
+  });
+
+  app.post('/api/trash/:id/restore', (req, res, next) => {
+    const meta = notes.readTrashMeta(req.params.id);
+    if (!meta) return next(httpError(404, 'Not found in trash'));
+    if (meta.passwordEntry && !isAdmin(req)) {
+      const password = req.body && req.body.password;
+      if (limiter.isBlocked(req.ip)) {
+        return res.status(429).json({ success: false, message: 'Too many failed attempts. Try again later.' });
+      }
+      if (!verifyPassword(password, meta.passwordEntry)) {
+        if (password) limiter.recordFailure(req.ip);
+        return res.status(401).json({ success: false, locked: true, message: 'Password required to restore this page' });
+      }
+    }
+    let name = notes.freeName(meta.name);
+    while (isProtected(name)) name = notes.freeName(`${name}-x`);
+    notes.restoreFromTrash(req.params.id, name);
+    if (meta.passwordEntry) {
+      passwords.setRaw(name, meta.passwordEntry);
+      updateSession(req, res, s => {
+        s.p[name] = fingerprint(name);
+      });
+    }
+    res.json({ success: true, name });
+  });
+
+  app.delete('/api/trash/:id', requireAdmin, (req, res, next) => {
+    if (!notes.purgeTrash(req.params.id)) return next(httpError(404, 'Not found in trash'));
+    res.json({ success: true });
+  });
+
+  // ---------- Admin ----------
+
+  app.post('/api/admin/password', requireAdmin, (req, res, next) => {
+    const { key, password } = req.body || {};
+    if (!['files', 'admin'].includes(key)) return next(httpError(400, 'Invalid key'));
+    if (key === 'admin' && password === null) return next(httpError(400, 'The admin password cannot be removed here'));
+    if (password !== null && (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH)) {
+      return next(httpError(400, `Passwords must be at least ${MIN_PASSWORD_LENGTH} characters`));
+    }
+    passwords.set(key, password);
+    updateSession(req, res, s => {
+      if (key === 'admin') s.a = fingerprint('admin');
+    });
+    res.json({ success: true });
+  });
+
+  app.get('/api/admin/backup', requireAdmin, async (req, res, next) => {
+    const date = new Date().toISOString().slice(0, 10);
+    res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="noter-backup-${date}.zip"` });
+    try {
+      await writeZip(res, fullBackupEntries(dataDir));
+      res.end();
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/admin/backups', requireAdmin, (req, res) => res.json(backups.list()));
+
+  app.get('/api/admin/backups/:file', requireAdmin, (req, res, next) => {
+    const file = backups.file(req.params.file);
+    if (!file) return next(httpError(404, 'Backup not found'));
+    res.download(file);
+  });
+
+  // ---------- File manager (shared "files" password) ----------
+
   function getSafeUploadPath(folder, filename) {
     if (typeof folder !== 'string' || typeof filename !== 'string') return null;
     if (folder.includes('\0') || filename.includes('\0')) return null;
@@ -171,40 +623,6 @@ function createApp(options = {}) {
     return full;
   }
 
-  // Middleware: checks the password for `key` if one is configured.
-  // With `required`, a missing password config denies access instead of allowing it.
-  function checkPassword(getKey, { required = false } = {}) {
-    return (req, res, next) => {
-      const key = getKey(req);
-      const requiredPassword = protectedPages[key];
-      if (!requiredPassword) {
-        if (!required) return next();
-        return res.status(403).json({
-          success: false,
-          message: `Disabled: set a "${key}" password in protected_pages.json to enable this.`
-        });
-      }
-      if (limiter.isBlocked(req.ip)) {
-        return res.status(429).json({ success: false, message: 'Too many failed attempts. Try again later.' });
-      }
-      const supplied = readPasswordHeader(req);
-      if (!passwordMatches(supplied, requiredPassword)) {
-        // Only wrong guesses count; simply opening a protected page does not
-        if (supplied) limiter.recordFailure(req.ip);
-        return res.status(401).json({ success: false, message: 'Unauthorized' });
-      }
-      next();
-    };
-  }
-
-  // Middleware: rejects requests whose :name param has no usable characters
-  function requirePageName(req, res, next) {
-    req.pageName = getSafeName(req.params.name);
-    if (!req.pageName) return res.status(400).json({ success: false, message: 'Invalid page name' });
-    next();
-  }
-
-  // Middleware: resolves a query/body folder param to a directory inside uploadsDir
   function resolveFolder(source, param) {
     return (req, res, next) => {
       const value = req[source] && req[source][param] !== undefined ? req[source][param] : '';
@@ -215,7 +633,6 @@ function createApp(options = {}) {
     };
   }
 
-  // Middleware: resolves :filename + ?folder= to an existing regular file
   function resolveExistingFile(req, res, next) {
     const filename = path.basename(req.params.filename);
     const filepath = ['', '.', '..'].includes(filename) ? null : path.join(req.folderPath, filename);
@@ -227,105 +644,24 @@ function createApp(options = {}) {
     next();
   }
 
-  const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-      if (!fs.existsSync(req.folderPath)) return cb(Object.assign(new Error('Folder does not exist'), { status: 400 }));
-      cb(null, req.folderPath);
-    },
-    filename: (req, file, cb) => {
-      cb(null, uniqueFileName(req.folderPath, sanitizeFileName(file.originalname)));
-    }
-  });
-  const upload = multer({
-    storage,
-    defParamCharset: 'utf8',
-    limits: { fileSize: maxUploadBytes, files: maxUploadFiles, fields: 10, parts: maxUploadFiles + 10 }
+  const fileManagerUpload = attachmentUpload(req => {
+    if (!fs.existsSync(req.folderPath)) throw httpError(400, 'Folder does not exist');
+    return req.folderPath;
   });
 
-  const app = express();
-  app.disable('x-powered-by');
-  if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY);
-
-  app.use((req, res, next) => {
-    res.set({
-      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-        "img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY',
-      'Referrer-Policy': 'no-referrer'
-    });
-    next();
-  });
-
-  app.use(express.json({ limit: maxNoteSize }));
-  app.use(express.static(path.join(__dirname, 'public')));
-
-  const pagePassword = checkPassword(req => req.pageName);
-  const filesPassword = checkPassword(() => 'files', { required: true });
-
-  // Serve dynamic person editor (e.g. /person/brody)
-  app.get('/person/:name', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'editor.html'));
-  });
-
-  app.get('/load/:name', requirePageName, pagePassword, (req, res) => {
-    const text = readNote(req.pageName);
-    res.set({ 'Cache-Control': 'no-store', 'X-Note-Version': contentVersion(text) });
-    res.type('text/plain').send(text);
-  });
-
-  app.post('/save/:name', requirePageName, pagePassword, (req, res) => {
-    // Rejecting non-JSON bodies also stops cross-site form posts from blanking a page
-    if (!req.body || typeof req.body.text !== 'string') {
-      return res.status(400).json({ success: false, message: 'Expected JSON body with a "text" string' });
-    }
-    // If the client says which version it edited, refuse to clobber a newer one
-    const { baseVersion } = req.body;
-    if (typeof baseVersion === 'string') {
-      const currentVersion = contentVersion(readNote(req.pageName));
-      if (baseVersion !== currentVersion) {
-        return res.status(409).json({ success: false, message: 'Page was changed elsewhere', version: currentVersion });
-      }
-    }
-    writeFileAtomic(getTextFile(req.pageName), req.body.text);
-    res.json({ success: true, version: contentVersion(req.body.text) });
-  });
-
-  // Protected pages are left out so their names are not advertised
-  app.get('/pages', (req, res) => {
-    const pages = fs.readdirSync(dataDir)
-      .filter(f => f.startsWith('person_') && f.endsWith('.txt'))
-      .map(f => f.replace(/^person_/, '').replace(/\.txt$/, ''))
-      .filter(name => !protectedPages[name]);
-    res.json(pages);
-  });
-
-  app.delete('/delete/:name', requirePageName, pagePassword, (req, res) => {
-    if (UNDELETABLE_PAGES.includes(req.pageName)) {
-      return res.status(403).send('Protected page');
-    }
-    const file = getTextFile(req.pageName);
-    if (fs.existsSync(file)) {
-      fs.unlinkSync(file);
-      return res.sendStatus(200);
-    }
-    res.sendStatus(404);
-  });
-
-  // File routes: always require the "files" password
-  app.post('/upload', filesPassword, resolveFolder('query', 'folder'), upload.array('files'), (req, res) => {
+  app.post('/upload', requireFiles, resolveFolder('query', 'folder'), fileManagerUpload.array('files'), (req, res) => {
     if (!req.files || req.files.length === 0) {
       return res.json({ success: false, message: 'No files provided' });
     }
     res.json({ success: true, count: req.files.length, files: req.files.map(f => f.filename) });
   });
 
-  app.get('/list-files', filesPassword, resolveFolder('query', 'folder'), (req, res) => {
+  app.get('/list-files', requireFiles, resolveFolder('query', 'folder'), (req, res) => {
     try {
-      const result = fs.readdirSync(req.folderPath).map(name => {
+      const result = fs.readdirSync(req.folderPath).filter(n => !n.endsWith('.tmp')).map(name => {
         const stats = fs.statSync(path.join(req.folderPath, name));
         const isDirectory = stats.isDirectory();
-        return { name, size: isDirectory ? null : stats.size, isDirectory };
+        return { name, size: isDirectory ? null : stats.size, isDirectory, modifiedAt: stats.mtimeMs };
       });
       res.json(result);
     } catch (err) {
@@ -333,8 +669,8 @@ function createApp(options = {}) {
     }
   });
 
-  app.post('/create-folder', filesPassword, resolveFolder('body', 'parent'), (req, res) => {
-    const folderName = sanitizeFolderName(req.body.name);
+  app.post('/create-folder', requireFiles, resolveFolder('body', 'parent'), (req, res) => {
+    const folderName = safeName(req.body.name);
     if (!folderName) return res.json({ success: false, message: 'Invalid folder name' });
     const folderPath = path.join(req.folderPath, folderName);
     if (fs.existsSync(folderPath)) return res.json({ success: false, message: 'Folder already exists' });
@@ -346,20 +682,17 @@ function createApp(options = {}) {
     }
   });
 
-  app.get('/download/:filename', filesPassword, resolveFolder('query', 'folder'), resolveExistingFile, (req, res) => {
-    // Sandbox the response in case a browser ever renders it inline
-    res.set('Content-Security-Policy', 'sandbox; default-src \'none\'');
+  app.get('/download/:filename', requireFiles, resolveFolder('query', 'folder'), resolveExistingFile, (req, res) => {
+    if (req.query.inline === '1') return sendUserFile(res, req.filePath, req.filename);
+    res.set('Content-Security-Policy', "sandbox; default-src 'none'");
     res.download(req.filePath, req.filename);
   });
 
-  app.get('/view/:filename', filesPassword, resolveFolder('query', 'folder'), resolveExistingFile, (req, res) => {
+  app.get('/view/:filename', requireFiles, resolveFolder('query', 'folder'), resolveExistingFile, (req, res) => {
     const stats = fs.statSync(req.filePath);
-    const isText = TEXT_PREVIEW_PATTERN.test(req.filename);
-
-    if (isText && stats.size < 5 * 1024 * 1024) { // 5MB limit for text preview
+    if (TEXT_PREVIEW_PATTERN.test(req.filename) && stats.size < 5 * 1024 * 1024) {
       try {
-        const content = fs.readFileSync(req.filePath, 'utf-8');
-        return res.json({ success: true, content, isText: true });
+        return res.json({ success: true, content: fs.readFileSync(req.filePath, 'utf-8'), isText: true });
       } catch (err) {
         // fall through to "not previewable"
       }
@@ -367,7 +700,7 @@ function createApp(options = {}) {
     res.json({ success: true, isText: false });
   });
 
-  app.delete('/delete-file/:filename', filesPassword, resolveFolder('query', 'folder'), resolveExistingFile, (req, res) => {
+  app.delete('/delete-file/:filename', requireFiles, resolveFolder('query', 'folder'), resolveExistingFile, (req, res) => {
     try {
       fs.unlinkSync(req.filePath);
       res.json({ success: true });
@@ -376,8 +709,8 @@ function createApp(options = {}) {
     }
   });
 
-  app.delete('/delete-folder/:foldername', filesPassword, resolveFolder('query', 'parent'), (req, res) => {
-    const foldername = sanitizeFolderName(req.params.foldername);
+  app.delete('/delete-folder/:foldername', requireFiles, resolveFolder('query', 'parent'), (req, res) => {
+    const foldername = safeName(req.params.foldername);
     const folderPath = foldername ? path.join(req.folderPath, foldername) : null;
     if (!folderPath || !fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
       return res.json({ success: false, message: 'Folder not found' });
@@ -390,13 +723,15 @@ function createApp(options = {}) {
     }
   });
 
-  // Generic error handler: never leak stack traces to clients
+  // ---------- Errors ----------
+
+  app.use('/api', (req, res) => res.status(404).json({ success: false, message: 'Not found' }));
+
+  // Never leak stack traces to clients
   app.use((err, req, res, next) => {
     let status = err.status || err.statusCode || 500;
     let message = status < 500 && err.expose !== false ? err.message : 'Internal server error';
-    if (err.type === 'entity.too.large') {
-      message = `Note too large (max ${maxNoteSize})`;
-    }
+    if (err.type === 'entity.too.large') message = `Note too large (max ${maxNoteSize})`;
     if (err instanceof multer.MulterError) {
       status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
       message = err.code === 'LIMIT_FILE_SIZE'
@@ -404,8 +739,8 @@ function createApp(options = {}) {
         : err.message;
     }
     if (status >= 500) console.error(err);
-    if (res.headersSent) return next(err);
-    res.status(status).json({ success: false, message });
+    if (res.headersSent) return res.end();
+    res.status(status).json({ success: false, message, ...(err.extra || {}) });
   });
 
   return app;
@@ -413,7 +748,7 @@ function createApp(options = {}) {
 
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
-  createApp().listen(port, () => console.log(`Listening on http://localhost:${port}`));
+  createApp({ backgroundJobs: true }).listen(port, () => console.log(`Listening on http://localhost:${port}`));
 }
 
-module.exports = { createApp, getSafeName, sanitizeFileName, passwordMatches };
+module.exports = { createApp, sanitizeFileName };

@@ -1,44 +1,75 @@
 # Noter
 
-A simple web-based note-taking app with per-page password protection, persistent storage, and a clean, themeable interface.
+A shared notebook for a small group of people: lists, recipes, code snippets and
+anything else, edited together in real time, with history so nothing is ever lost.
 
 ---
 
 ## Features
 
-- Create, edit, and delete named note pages (e.g., `/person/brody`)
-- Autosave with a status indicator, and a warning if you leave with unsaved changes
-- Conflict detection: if a page changed elsewhere since you opened it, you choose whether to overwrite it or load the latest version (your text is downloaded as a backup)
-- Per-page password protection (optional, via `protected_pages.json`)
-- Password-protected file manager with folders, previews, uploads and downloads
-- Download/upload notes as `.txt` files
-- Light and dark themes (toggleable, persists in browser)
-- All notes stored as plain text files on the server
+**Writing**
+- Markdown with a View / Edit toggle (Ctrl+E). Plain-text notes still look right.
+- Checklists (`- [ ] item`) you can tick straight from the rendered page
+- `[[page-name]]` links between pages, `#tags`, and automatic links for URLs
+- Paste or drop images and files into a page to attach them
+- Enter continues lists, Tab / Shift+Tab indents list items
+- Copy buttons on code blocks; print a page cleanly
+
+**Working together**
+- Live updates: when someone saves, everyone viewing the page sees it within a second
+- Presence: avatars show who else has the page open
+- Automatic merging: two people editing different lines of the same page at once
+  both keep their changes. Editing the *same* line asks what to keep (yours,
+  theirs, or both).
+- Everyone picks a display name (Settings) so edits and history show who did what
+
+**Never lose anything**
+- Version history for every page with a diff view and one-click restore
+- Deleted pages go to Trash for 30 days (with their history and attachments); Undo right after deleting
+- Admin: download a full backup zip any time; automatic daily backups (last 7) are kept on the disk
+
+**Finding things**
+- Sidebar of every page, newest first, with title, preview, who edited it and when
+- Filter by name or `#tag`; Ctrl+K searches the text of every page you can open
+
+**Privacy**
+- Private pages (password). Make a new page private when you create it; the admin
+  can lock or unlock any page. Unlocked pages stay unlocked on that device for 30 days.
+- Read-only share links for a single page (revocable), even for private pages
+- Password-protected shared file manager
+
+**Everywhere**
+- Works on phones; installable as an app (Add to Home Screen)
+- Public pages you've opened can be read offline
+- Light and dark themes (follows your device by default)
 
 ---
 
 ## Project Structure
 
 ```
-server.js              Express server (notes API, file manager API, security headers)
-package.json
-test/                  API tests (node:test), run with `npm test`
-persistent/            Data directory: notes (person_<name>.txt) and uploads/
+server.js              Express app: API routes, auth, security headers
+lib/
+    notes.js           Note storage: history, trash, rename, search, merging
+    passwords.js       protected_pages.json (hashed passwords, hot reload)
+    session.js         Signed session cookie (what this browser has unlocked)
+    live.js            Server-sent events: presence and live updates
+    shares.js          Read-only share links
+    backups.js, zip.js Backup zips
 public/
-    index.html         Home page (the "home" note, page picker, create page)
-    editor.html        Editor for /person/<name>
-    files.html         File manager
-    blog.html          Static blog page
-    js/common.js       Shared helpers (safe link rendering, passwords, theme)
-    js/pad.js          Note loading/autosave logic used by home and editor
-    js/home.js         Home page picker / create page
-    js/files.js        File manager logic
-    style.css, dark.css, style_blog.css
+    index.html         The app (sidebar + page view) for / and /person/<name>
+    share.html         Read-only view for share links (/s/<token>)
+    files.html         Shared file manager
+    app.css            Styles (light/dark tokens)
+    sw.js, manifest.webmanifest, icons/   Installable app / offline reading
+    js/app/            App modules (page view, sidebar, dialogs)
+    js/lib/            Shared helpers (API, markdown, UI)
+test/                  API tests (npm test) and a browser test (test/e2e)
 ```
 
-All JavaScript lives in `public/js/`. The server sends a Content-Security-Policy
-that blocks inline scripts, so don't add `<script>` blocks or `onclick=` attributes
-to the HTML; add code to a file in `public/js/` instead.
+All JavaScript lives in files under `public/js/`. The server sends a
+Content-Security-Policy that blocks inline scripts, so don't add `<script>` blocks
+or `onclick=` attributes to the HTML.
 
 ---
 
@@ -46,69 +77,88 @@ to the HTML; add code to a file in `public/js/` instead.
 
 ```sh
 npm install
-npm start      # http://localhost:3000
-npm test       # run the API tests
+npm start          # http://localhost:3000
+npm test           # API tests
+npm run test:e2e   # browser test (needs Playwright, see test/e2e/app.e2e.js)
 ```
 
-- Home: [http://localhost:3000/](http://localhost:3000/)
-- Editor for a page: [http://localhost:3000/person/brody](http://localhost:3000/person/brody)
-- Files: [http://localhost:3000/files.html](http://localhost:3000/files.html)
+### Keyboard shortcuts
+
+| Keys | Action |
+| --- | --- |
+| Ctrl/⌘ + K | Search and jump to any page (or create one) |
+| Ctrl/⌘ + E | Switch between View and Edit |
+| Ctrl/⌘ + S | Save now |
+| Alt + N | New page |
 
 ### Configuration (environment variables)
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `3000` | Port to listen on |
-| `NOTER_DATA_DIR` | `./persistent` | Where notes and uploads are stored |
+| `NOTER_DATA_DIR` | `./persistent` | Where notes, history, attachments and uploads are stored |
 | `NOTER_PASSWORDS_FILE` | *(see below)* | Path to `protected_pages.json` |
+| `NOTER_SECRET` | *(generated)* | Secret for signing session cookies. By default one is generated and kept in `<data dir>/.noter/secret` |
 | `NOTER_MAX_UPLOAD_MB` | `50` | Max size per uploaded file |
 | `NOTER_MAX_NOTE_SIZE` | `5mb` | Max size of a single note |
-| `TRUST_PROXY` | *(unset)* | Number of reverse proxies in front of the app (e.g. `1` on Render), so rate limiting sees real client IPs. Leave unset when not behind a proxy. |
+| `TRUST_PROXY` | *(unset)* | Number of reverse proxies in front of the app (`1` on Render), so rate limiting sees real client IPs and cookies are marked Secure. Leave unset when not behind a proxy. |
 
 ---
 
-## Password Protection
+## Passwords and privacy
 
-Create a `protected_pages.json` file:
+`protected_pages.json` holds page passwords plus two special keys:
 
 ```json
 {
-  "brody": "yourpassword",
-  "elizabeth": "anotherpassword",
-  "files": "file-manager-password"
+  "admin": "admin-password",
+  "files": "file-manager-password",
+  "brody": "yourpassword"
 }
 ```
 
-The file is looked up in this order: `$NOTER_PASSWORDS_FILE`, then the data
-directory (`persistent/protected_pages.json`, which is what you want on a host with
-a persistent disk), then the project root. It is gitignored, so it must be created on
-the server. If the file contains invalid JSON the server refuses to start.
+- **`admin`**: unlocks every page, lets you lock/unlock existing pages, empty the
+  trash, change the files password and download backups (Settings → Admin).
+- **`files`**: the shared file manager is disabled until this is set.
+- **page names**: private pages. People can also make pages private from the app.
 
-- A protected page needs its password to be **read, saved, or deleted**. Protected
-  pages are not shown in the page list.
-- The **file manager is disabled** until a `"files"` password is set.
-- Passwords are sent in an `X-Noter-Password` header (never in the URL), and the
-  browser only remembers them for the current session.
-- After 10 wrong passwords from one IP within 15 minutes, further attempts are
-  refused until the window passes.
-- Pages without a password are public: anyone who can reach the site can read
-  and edit them.
+The file is looked up in this order: `$NOTER_PASSWORDS_FILE`, the data directory
+(`persistent/protected_pages.json`, use this on a host with a persistent disk),
+then the project root. It is gitignored. Edits to it take effect within a few
+seconds, no restart needed. If it contains invalid JSON at startup the server
+refuses to start.
+
+Passwords set through the app are stored as scrypt hashes; passwords you type into
+the file by hand can be plain text. Changing a password signs everyone else out of
+that page.
+
+Rules that keep a shared notebook safe from lock-outs:
+- Anyone can make a **new or empty** page private.
+- Only the **admin** can make an existing shared page with content private.
+- Anyone with a private page's password can change or remove it.
+- Pages without a password are public: anyone who can reach the site can read and edit them.
+
+Sign-in is a signed, HttpOnly, SameSite=Strict cookie; after 10 wrong passwords
+from one IP in 15 minutes further attempts are refused for a while.
 
 ---
 
-## Notes Storage
+## Storage
 
-- Each note page is stored as `person_<name>.txt` in the data directory; the home page is `person_home.txt`.
-- Page names may only contain letters, numbers, `-` and `_`, and are case-sensitive.
-- Uploaded files are stored in `uploads/` inside the data directory. Uploading a file
-  with an existing name keeps both (`name (1).ext`).
+Everything lives in the data directory (`persistent/` by default):
 
----
-
-## Customization
-
-- Edit CSS in `public/style.css` and `public/dark.css` for appearance.
-- Add/remove links in `public/index.html` and `public/editor.html` for navigation.
+```
+person_<name>.txt          the notes (plain text / Markdown, unchanged format)
+attachments/<name>/        files attached to a page
+uploads/                   the shared file manager
+protected_pages.json       passwords
+.noter/meta/               who edited each page and when
+.noter/history/            earlier versions of pages
+.noter/trash/              deleted pages (kept 30 days)
+.noter/shares.json         share links
+.noter/backups/            automatic daily backups (last 7)
+.noter/secret              cookie-signing secret (never included in backups)
+```
 
 ---
 
@@ -125,6 +175,23 @@ Brody Kilpatrick
 ---
 
 # Release Notes
+
+## v2.0.0
+
+A rebuild of the interface and a lot of new features for groups sharing pages:
+Markdown with checklists, live collaboration with presence and automatic merging,
+version history, trash, search, tags, attachments, share links, private pages from
+the app, admin tools and backups, installable app with offline reading, dark mode
+and a phone-friendly layout.
+
+### Upgrading from 1.x
+- Existing notes, passwords and uploads are used as they are. New data is added
+  under `.noter/` and `attachments/` in the data directory.
+- Add an `"admin"` password to `protected_pages.json` to use the admin tools.
+- Sign-in now uses a cookie instead of a password header, so everyone enters page
+  passwords once more (then stays signed in on that device for 30 days).
+- Existing notes are now shown as Markdown. Plain text looks the same, except that
+  lines starting with `#`, `-`, `*` or a number become headings and lists.
 
 ## v1.2.0
 

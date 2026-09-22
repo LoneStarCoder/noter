@@ -1,0 +1,20 @@
+{
+  "name": "Noter",
+  "short_name": "Noter",
+  "description": "Shared notes, lists and recipes for the people you care about.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f6f3",
+  "theme_color": "#2f5fd0",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "shortcuts": [
+    { "name": "Search", "url": "/?search=1" },
+    { "name": "Files", "url": "/files.html" }
+  ]
+}

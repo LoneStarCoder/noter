@@ -1,393 +1,249 @@
-// File manager page. All user-controlled values (file and folder names) are
-// rendered with textContent / DOM properties, never through innerHTML.
-(function () {
-  let currentPassword = Noter.getPassword('files');
-  let currentFolder = '';
+// Shared file manager. Access comes from the session cookie set by /api/unlock.
+// File and folder names are only ever rendered as text.
+import { api, get, post } from './lib/api.js';
+import { el, icon, modal, confirmDialog, toast, formatSize, timeAgo } from './lib/ui.js';
 
-  const passwordSection = document.getElementById('password-section');
-  const mainContent = document.getElementById('main-content');
-  const passwordInput = document.getElementById('password-input');
-  const passwordStatus = document.getElementById('password-status');
-  const uploadArea = document.getElementById('upload-area');
-  const fileInput = document.getElementById('file-input');
-  const uploadStatus = document.getElementById('upload-status');
-  const uploadLoading = document.getElementById('upload-loading');
-  const fileList = document.getElementById('file-list');
-  const downloadLoading = document.getElementById('download-loading');
-  const breadcrumb = document.getElementById('breadcrumb');
-  const modal = document.getElementById('view-modal');
-  const modalFilename = document.getElementById('modal-filename');
-  const modalBodyContent = document.getElementById('modal-body-content');
-  let modalObjectUrl = null;
+const $ = id => document.getElementById(id);
+let currentFolder = '';
 
-  // Builds a URL with query params (empty values are dropped)
-  function buildApiUrl(endpoint, params) {
-    const query = new URLSearchParams();
-    Object.entries(params || {}).forEach(([key, value]) => {
-      if (value !== undefined && value !== '') query.append(key, value);
-    });
-    const qs = query.toString();
-    return qs ? endpoint + '?' + qs : endpoint;
+function url(endpoint, params = {}) {
+  const query = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) query.append(k, v);
+  const qs = query.toString();
+  return qs ? `${endpoint}?${qs}` : endpoint;
+}
+
+function showLocked(message) {
+  $('main-content').hidden = true;
+  $('lock-btn').hidden = true;
+  $('locked').hidden = false;
+  if (message) $('locked-note').textContent = message;
+  $('password-input').focus();
+}
+
+function showMain() {
+  $('locked').hidden = true;
+  $('main-content').hidden = false;
+  $('lock-btn').hidden = false;
+  renderBreadcrumb();
+  loadFiles();
+}
+
+// Returns true if the error was an access problem (and shows the lock card)
+function handleAccess(err) {
+  if (err.status === 401) {
+    showLocked('Enter the files password.');
+    return true;
   }
-
-  function api(url, options = {}) {
-    options.headers = Noter.authHeaders(currentPassword, options.headers);
-    return fetch(url, options);
+  if (err.status === 403) {
+    showLocked(err.message);
+    $('unlock-form').hidden = true;
+    return true;
   }
+  return false;
+}
 
-  function el(tag, props, children) {
-    const node = Object.assign(document.createElement(tag), props || {});
-    (children || []).forEach(child => node.append(child));
-    return node;
+async function checkAccess() {
+  try {
+    await get('/list-files');
+    showMain();
+  } catch (err) {
+    if (!handleAccess(err)) showLocked('Could not reach the server.');
   }
+}
 
-  function setStatus(target, message, isError) {
-    target.textContent = message;
-    target.classList.remove('success', 'error');
-    target.classList.add(isError ? 'error' : 'success');
+$('unlock-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('password-status').textContent = '';
+  try {
+    await post('/api/unlock', { scope: 'files', password: $('password-input').value });
+    $('password-input').value = '';
+    showMain();
+  } catch (err) {
+    $('password-status').textContent = err.status === 429 ? 'Too many attempts. Try again later.' : (err.status === 401 ? 'Incorrect password' : err.message);
   }
+});
 
-  function showMain() {
-    passwordSection.style.display = 'none';
-    mainContent.style.display = 'block';
-    updateBreadcrumb();
-    loadFiles();
-  }
+$('lock-btn').addEventListener('click', async () => {
+  await post('/api/lock', { scope: 'files' });
+  showLocked('Files are locked on this device.');
+});
 
-  function showPasswordForm(message) {
-    mainContent.style.display = 'none';
-    passwordSection.style.display = 'block';
-    if (message) setStatus(passwordStatus, message, true);
-    passwordInput.focus();
-  }
+// ---------- Upload ----------
 
-  // Handles auth-related statuses shared by every call; returns true if handled
-  async function handleAuthError(res) {
-    if (res.status === 401) {
-      currentPassword = '';
-      Noter.setPassword('files', '');
-      showPasswordForm('Password required');
-      return true;
-    }
-    if (res.status === 403 || res.status === 429) {
-      const data = await res.json().catch(() => ({}));
-      showPasswordForm(data.message || 'Access denied');
-      return true;
-    }
-    return false;
-  }
-
-  function checkAccess() {
-    api(buildApiUrl('/list-files'))
-      .then(async res => {
-        if (res.status === 401) {
-          showPasswordForm(currentPassword ? 'Incorrect password' : '');
-          if (!currentPassword) passwordStatus.className = 'status-message';
-          return;
-        }
-        if (await handleAuthError(res)) return;
-        showMain();
-      })
-      .catch(() => showPasswordForm('Error contacting server'));
-  }
-
-  function submitPassword() {
-    const password = passwordInput.value;
-    if (!password) {
-      setStatus(passwordStatus, 'Please enter a password', true);
-      return;
-    }
-    currentPassword = password;
-    api(buildApiUrl('/list-files'))
-      .then(async res => {
-        if (res.ok) {
-          Noter.setPassword('files', password);
-          passwordInput.value = '';
-          passwordStatus.className = 'status-message';
-          showMain();
-          return;
-        }
-        currentPassword = '';
-        const data = await res.json().catch(() => ({}));
-        setStatus(passwordStatus, res.status === 401 ? 'Incorrect password' : (data.message || 'Access denied'), true);
-      })
-      .catch(() => setStatus(passwordStatus, 'Error checking password', true));
-  }
-
-  document.getElementById('password-submit').addEventListener('click', submitPassword);
-  passwordInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') submitPassword();
-  });
-
-  // Drag and drop
-  uploadArea.addEventListener('click', () => fileInput.click());
-  uploadArea.addEventListener('dragover', (e) => {
+const uploadArea = $('upload-area');
+$('file-input').addEventListener('change', (e) => {
+  upload([...e.target.files]);
+  e.target.value = '';
+});
+uploadArea.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault();
-    uploadArea.classList.add('dragover');
-  });
-  uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
-  uploadArea.addEventListener('drop', (e) => {
-    e.preventDefault();
-    uploadArea.classList.remove('dragover');
-    handleFiles(e.dataTransfer.files);
-  });
-  fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
-
-  function handleFiles(files) {
-    if (files.length === 0) return;
-
-    uploadLoading.classList.add('active');
-    uploadStatus.classList.remove('success', 'error');
-
-    const formData = new FormData();
-    for (const file of files) formData.append('files', file);
-
-    api(buildApiUrl('/upload', { folder: currentFolder }), { method: 'POST', body: formData })
-      .then(async res => {
-        uploadLoading.classList.remove('active');
-        if (await handleAuthError(res)) return;
-        const data = await res.json();
-        if (data.success) {
-          setStatus(uploadStatus, `Successfully uploaded ${data.count} file(s)`, false);
-          fileInput.value = '';
-          loadFiles();
-        } else {
-          setStatus(uploadStatus, data.message || 'Upload failed', true);
-        }
-      })
-      .catch(err => {
-        uploadLoading.classList.remove('active');
-        setStatus(uploadStatus, 'Upload failed: ' + err.message, true);
-      });
+    $('file-input').click();
   }
+});
+uploadArea.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  uploadArea.classList.add('dragover');
+});
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadArea.classList.remove('dragover');
+  upload([...e.dataTransfer.files]);
+});
 
-  function navigateToFolder(folder) {
-    currentFolder = folder;
-    updateBreadcrumb();
+async function upload(files) {
+  if (!files.length) return;
+  const status = $('upload-status');
+  status.textContent = `Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`;
+  const form = new FormData();
+  for (const file of files) form.append('files', file);
+  try {
+    const data = await api('POST', url('/upload', { folder: currentFolder }), form);
+    if (!data.success) throw new Error(data.message || 'Upload failed');
+    status.textContent = `Uploaded ${data.count} file${data.count > 1 ? 's' : ''}.`;
     loadFiles();
+  } catch (err) {
+    if (!handleAccess(err)) status.textContent = `Upload failed: ${err.message}`;
   }
+}
 
-  function folderLink(label, folder) {
-    const link = el('a', { href: '#', textContent: label });
-    link.addEventListener('click', (e) => {
+// ---------- Listing ----------
+
+function navigateTo(folder) {
+  currentFolder = folder;
+  renderBreadcrumb();
+  loadFiles();
+}
+
+function renderBreadcrumb() {
+  const crumbs = $('breadcrumb');
+  const link = (label, folder) => el('a', {
+    href: '#',
+    text: label,
+    onclick: (e) => {
       e.preventDefault();
-      navigateToFolder(folder);
-    });
-    return link;
-  }
-
-  function updateBreadcrumb() {
-    breadcrumb.replaceChildren(folderLink('Root', ''));
-    let builtPath = '';
-    (currentFolder ? currentFolder.split('/') : []).forEach(part => {
-      builtPath = builtPath ? builtPath + '/' + part : part;
-      breadcrumb.append(' / ', folderLink(part, builtPath));
-    });
-  }
-
-  function button(label, className, onClick) {
-    const btn = el('button', { textContent: label, className: className || '' });
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      onClick();
-    });
-    return btn;
-  }
-
-  function renderFolder(folder) {
-    const subPath = currentFolder ? currentFolder + '/' + folder.name : folder.name;
-    const info = el('div', { className: 'file-info' }, [
-      el('p', { className: 'file-name', textContent: '📁 ' + folder.name })
-    ]);
-    info.style.cursor = 'pointer';
-    info.addEventListener('click', () => navigateToFolder(subPath));
-
-    return el('div', { className: 'file-item folder-item' }, [
-      info,
-      el('div', { className: 'file-actions' }, [
-        button('Open', '', () => navigateToFolder(subPath)),
-        button('Delete', 'delete-btn', () => deleteFolder(folder.name))
-      ])
-    ]);
-  }
-
-  function renderFile(file) {
-    return el('div', { className: 'file-item' }, [
-      el('div', { className: 'file-info' }, [
-        el('p', { className: 'file-name', textContent: file.name }),
-        el('p', { className: 'file-size', textContent: formatSize(file.size) })
-      ]),
-      el('div', { className: 'file-actions' }, [
-        button('View', 'view-btn', () => viewFile(file.name)),
-        button('Download', '', () => downloadFile(file.name)),
-        button('Delete', 'delete-btn', () => deleteFile(file.name))
-      ])
-    ]);
-  }
-
-  function loadFiles() {
-    downloadLoading.classList.add('active');
-    fileList.replaceChildren();
-
-    api(buildApiUrl('/list-files', { folder: currentFolder }))
-      .then(async res => {
-        downloadLoading.classList.remove('active');
-        if (await handleAuthError(res)) return;
-        const items = await res.json();
-        const folders = items.filter(i => i.isDirectory);
-        const files = items.filter(i => !i.isDirectory);
-
-        if (folders.length === 0 && files.length === 0) {
-          const empty = el('p', { textContent: 'No files or folders here' });
-          empty.style.cssText = 'color: #666; text-align: center;';
-          fileList.append(empty);
-          return;
-        }
-        folders.forEach(folder => fileList.append(renderFolder(folder)));
-        files.forEach(file => fileList.append(renderFile(file)));
-      })
-      .catch(() => {
-        downloadLoading.classList.remove('active');
-        const error = el('p', { textContent: 'Failed to load files' });
-        error.style.color = 'red';
-        fileList.append(error);
-      });
-  }
-
-  function createFolder() {
-    const input = document.getElementById('folder-name-input');
-    const name = input.value.trim();
-    if (!name) {
-      alert('Please enter a folder name');
-      return;
+      navigateTo(folder);
     }
-
-    api('/create-folder', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, parent: currentFolder })
-    })
-      .then(async res => {
-        if (await handleAuthError(res)) return;
-        const data = await res.json();
-        if (data.success) {
-          input.value = '';
-          loadFiles();
-        } else {
-          alert('Failed to create folder: ' + (data.message || 'Unknown error'));
-        }
-      })
-      .catch(err => alert('Failed to create folder: ' + err.message));
-  }
-
-  document.getElementById('create-folder-btn').addEventListener('click', createFolder);
-
-  // Downloads go through fetch so the password travels in a header, not the URL
-  async function fetchFileBlob(filename) {
-    const res = await api(buildApiUrl(`/download/${encodeURIComponent(filename)}`, { folder: currentFolder }));
-    if (await handleAuthError(res)) return null;
-    if (!res.ok) throw new Error('File not found');
-    return res.blob();
-  }
-
-  function saveBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const link = el('a', { href: url, download: filename });
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  function downloadFile(filename) {
-    fetchFileBlob(filename)
-      .then(blob => blob && saveBlob(blob, filename))
-      .catch(err => alert('Download failed: ' + err.message));
-  }
-
-  function deleteFile(filename) {
-    if (!confirm(`Delete "${filename}"?`)) return;
-
-    api(buildApiUrl(`/delete-file/${encodeURIComponent(filename)}`, { folder: currentFolder }), { method: 'DELETE' })
-      .then(async res => {
-        if (await handleAuthError(res)) return;
-        const data = await res.json();
-        if (data.success) loadFiles();
-        else alert('Delete failed: ' + (data.message || 'Unknown error'));
-      })
-      .catch(err => alert('Delete failed: ' + err.message));
-  }
-
-  function deleteFolder(foldername) {
-    if (!confirm(`Delete folder "${foldername}" and all its contents?`)) return;
-
-    api(buildApiUrl(`/delete-folder/${encodeURIComponent(foldername)}`, { parent: currentFolder }), { method: 'DELETE' })
-      .then(async res => {
-        if (await handleAuthError(res)) return;
-        const data = await res.json();
-        if (data.success) loadFiles();
-        else alert('Delete failed: ' + (data.message || 'Unknown error'));
-      })
-      .catch(err => alert('Delete failed: ' + err.message));
-  }
-
-  async function viewFile(filename) {
-    try {
-      const res = await api(buildApiUrl(`/view/${encodeURIComponent(filename)}`, { folder: currentFolder }));
-      if (await handleAuthError(res)) return;
-      const data = await res.json();
-      if (!data.success) throw new Error(data.message || 'File not found');
-
-      modalFilename.textContent = filename;
-      modalBodyContent.replaceChildren();
-
-      if (data.isText && typeof data.content === 'string') {
-        modalBodyContent.append(el('div', { className: 'file-content', textContent: data.content }));
-      } else {
-        const extension = filename.split('.').pop().toLowerCase();
-        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(extension)) {
-          const blob = await fetchFileBlob(filename);
-          if (!blob) return;
-          modalObjectUrl = URL.createObjectURL(blob);
-          const img = el('img', { src: modalObjectUrl, alt: filename });
-          img.style.cssText = 'max-width: 100%; max-height: 500px;';
-          modalBodyContent.append(img);
-        } else {
-          const link = el('a', { href: '#', textContent: 'Download it instead' });
-          link.addEventListener('click', (e) => {
-            e.preventDefault();
-            downloadFile(filename);
-          });
-          modalBodyContent.append(el('p', {}, ['This file cannot be previewed. ', link]));
-        }
-      }
-      modal.classList.add('active');
-    } catch (err) {
-      alert('Failed to view file: ' + err.message);
-    }
-  }
-
-  function closeModal() {
-    modal.classList.remove('active');
-    if (modalObjectUrl) {
-      URL.revokeObjectURL(modalObjectUrl);
-      modalObjectUrl = null;
-    }
-  }
-
-  document.getElementById('modal-close').addEventListener('click', closeModal);
-  window.addEventListener('click', (event) => {
-    if (event.target === modal) closeModal();
   });
-
-  function formatSize(bytes) {
-    if (!bytes) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+  crumbs.replaceChildren(link('All files', ''));
+  let built = '';
+  for (const part of currentFolder ? currentFolder.split('/') : []) {
+    built = built ? `${built}/${part}` : part;
+    crumbs.append(' / ', link(part, built));
   }
+}
 
-  Noter.initThemeToggle(document.getElementById('theme-toggle'));
-  checkAccess();
-})();
+async function loadFiles() {
+  const list = $('file-list');
+  let items;
+  try {
+    items = await get(url('/list-files', { folder: currentFolder }));
+  } catch (err) {
+    if (!handleAccess(err)) list.replaceChildren(el('li', { class: 'list-empty', text: 'Could not load files' }));
+    return;
+  }
+  items.sort((a, b) => (b.isDirectory - a.isDirectory) || a.name.localeCompare(b.name));
+  if (!items.length) {
+    list.replaceChildren(el('li', { class: 'list-empty', text: 'Nothing here yet.' }));
+    return;
+  }
+  list.replaceChildren(...items.map(item => (item.isDirectory ? folderRow(item) : fileRow(item))));
+}
+
+function folderRow(folder) {
+  const path = currentFolder ? `${currentFolder}/${folder.name}` : folder.name;
+  const name = el('div', { class: 'primary-line', text: folder.name, onclick: () => navigateTo(path) });
+  return el('li', { class: 'file-row folder' }, [
+    el('span', { class: 'icon' }, [folderIcon()]),
+    el('div', { class: 'grow' }, [name]),
+    el('div', { class: 'actions' }, [
+      el('button', { class: 'btn small', type: 'button', text: 'Open', onclick: () => navigateTo(path) }),
+      el('button', { class: 'btn small danger', type: 'button', text: 'Delete', onclick: () => deleteFolder(folder.name) })
+    ])
+  ]);
+}
+
+function folderIcon() {
+  const svg = icon('file');
+  svg.innerHTML = '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>';
+  return svg;
+}
+
+function fileRow(file) {
+  const downloadUrl = url(`/download/${encodeURIComponent(file.name)}`, { folder: currentFolder });
+  return el('li', { class: 'file-row' }, [
+    el('span', { class: 'icon' }, [icon('file')]),
+    el('div', { class: 'grow' }, [
+      el('div', { class: 'primary-line', text: file.name }),
+      el('div', { class: 'secondary-line', text: [formatSize(file.size), file.modifiedAt ? timeAgo(file.modifiedAt) : ''].filter(Boolean).join(' · ') })
+    ]),
+    el('div', { class: 'actions' }, [
+      el('button', { class: 'btn small', type: 'button', text: 'View', onclick: () => viewFile(file.name) }),
+      el('a', { class: 'btn small', href: downloadUrl, download: file.name, text: 'Download' }),
+      el('button', { class: 'btn small danger', type: 'button', text: 'Delete', onclick: () => deleteFile(file.name) })
+    ])
+  ]);
+}
+
+async function viewFile(name) {
+  let body;
+  if (/\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(name)) {
+    body = el('img', { class: 'preview-img', alt: name, src: url(`/download/${encodeURIComponent(name)}`, { folder: currentFolder, inline: '1' }) });
+  } else {
+    try {
+      const data = await get(url(`/view/${encodeURIComponent(name)}`, { folder: currentFolder }));
+      body = data.isText
+        ? el('pre', { class: 'preview-text', text: data.content })
+        : el('p', { text: 'This file type cannot be previewed. Use Download instead.' });
+    } catch (err) {
+      if (handleAccess(err)) return;
+      return toast(err.message, { error: true });
+    }
+  }
+  await modal({ title: name, wide: true, body, actions: [{ label: 'Close', primary: true }] });
+}
+
+async function deleteFile(name) {
+  if (!(await confirmDialog(`Delete “${name}”? This cannot be undone.`, { confirmLabel: 'Delete', danger: true }))) return;
+  try {
+    const data = await api('DELETE', url(`/delete-file/${encodeURIComponent(name)}`, { folder: currentFolder }));
+    if (!data.success) throw new Error(data.message);
+    loadFiles();
+  } catch (err) {
+    if (!handleAccess(err)) toast(`Delete failed: ${err.message}`, { error: true });
+  }
+}
+
+async function deleteFolder(name) {
+  if (!(await confirmDialog(`Delete the folder “${name}” and everything in it? This cannot be undone.`, { confirmLabel: 'Delete folder', danger: true }))) return;
+  try {
+    const data = await api('DELETE', url(`/delete-folder/${encodeURIComponent(name)}`, { parent: currentFolder }));
+    if (!data.success) throw new Error(data.message);
+    loadFiles();
+  } catch (err) {
+    if (!handleAccess(err)) toast(`Delete failed: ${err.message}`, { error: true });
+  }
+}
+
+async function createFolder() {
+  const input = $('folder-name-input');
+  const name = input.value.trim();
+  if (!name) return input.focus();
+  try {
+    const data = await post('/create-folder', { name, parent: currentFolder });
+    if (!data.success) throw new Error(data.message);
+    input.value = '';
+    loadFiles();
+  } catch (err) {
+    if (!handleAccess(err)) toast(`Could not create folder: ${err.message}`, { error: true });
+  }
+}
+
+$('create-folder-btn').addEventListener('click', createFolder);
+$('folder-name-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') createFolder();
+});
+
+checkAccess();

@@ -1,50 +1,77 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Noter Home</title>
-  <link rel="stylesheet" href="/style.css">
-  <link id="theme-style" rel="stylesheet" href="/style.css">
-
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Noter</title>
+  <meta name="description" content="Shared notes for the people you care about.">
+  <meta name="theme-color" content="#2f5fd0">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/js/theme-init.js"></script>
 </head>
-<body data-page="home">
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar" aria-label="Pages">
+      <div class="sidebar-header">
+        <a class="brand" href="/"><img src="/icons/icon.svg" alt=""><span>Noter</span></a>
+        <button class="icon-btn" id="new-page-btn" title="New page (Alt+N)" aria-label="New page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+      <div class="sidebar-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input class="input" id="filter-input" type="search" placeholder="Filter pages…" aria-label="Filter pages" autocomplete="off">
+      </div>
+      <div class="tag-row" id="tag-row"></div>
+      <ul class="page-list" id="page-list" aria-live="polite"></ul>
+      <div class="sidebar-footer">
+        <button class="btn" id="search-btn" title="Search everything (Ctrl+K)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>Search
+        </button>
+        <a class="btn" href="/files.html" title="Shared files">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Files
+        </a>
+        <button class="btn" id="trash-btn" title="Recently deleted">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>Trash
+        </button>
+        <button class="btn" id="settings-btn" title="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings
+        </button>
+      </div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
 
-  
-  <table>
-    <tr>
-      <td><a href="/person/brody">Brody</a></td>
-      <td><a href="/person/elizabeth">Elizabeth</a></td>
-      <td><a href="/files.html">Files</a></td>
-      <td><div>
-          <select id="page-select">
-            <option disabled selected>Loading...</option>
-          </select><button id="go-btn">Go</button>
+    <main class="main">
+      <div class="banner warn" id="offline-banner" hidden>You're offline. Changes will be saved when you reconnect.</div>
+      <header class="topbar">
+        <button class="icon-btn only-mobile" id="nav-btn" aria-label="Show pages">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="page-heading">
+          <svg class="lock" id="page-lock-icon" hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          <h1 id="page-title">Noter</h1>
         </div>
-      </td>
-<!--      <td><a href="/blog.html">Blog</a></td> -->
-      <td><button id="theme-toggle" >🌙</button></td>
-    </tr>
-</table>
-  <p>Everything below here is editable. <span id="save-status" class="save-status"></span></p>
-  <HR>
-  
-  <!-- <textarea id="pad" placeholder="Home..."></textarea> -->
-  <div id="pad" contenteditable="false" spellcheck="false">
+        <div class="presence" id="presence" aria-label="People viewing this page"></div>
+        <span class="save-status" id="save-status" role="status"></span>
+        <div class="segmented" id="mode-toggle" role="group" aria-label="View mode" hidden>
+          <button type="button" data-mode="view" aria-pressed="true" title="Read (Ctrl+E)">View</button>
+          <button type="button" data-mode="edit" aria-pressed="false" title="Edit (Ctrl+E)">Edit</button>
+        </div>
+        <button class="icon-btn" id="page-menu-btn" aria-label="Page actions" aria-haspopup="menu" hidden>
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+        </button>
+      </header>
+      <div class="content" id="content">
+        <div class="page-body" id="page-body"></div>
+      </div>
+    </main>
   </div>
-<HR>
-  <div id="new-page-bar">
-    <input id="new-page-name" type="text" placeholder="New page name..." />
-    <button id="create-btn">Create</button>
-  </div>
-
-
-  
-
-
-  <script src="/js/common.js"></script>
-  <script src="/js/pad.js"></script>
-  <script src="/js/home.js"></script>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <input type="file" id="attach-input" multiple hidden>
+  <input type="file" id="import-input" accept=".txt,.md,text/plain,text/markdown" hidden>
+  <script type="module" src="/js/app/main.js"></script>
 </body>
 </html>

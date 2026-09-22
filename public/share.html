@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Shared note · Noter</title>
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/js/theme-init.js"></script>
+  <style>
+    body { overflow-y: auto; }
+    .share-top { display: flex; align-items: center; gap: 10px; max-width: 860px; margin: 0 auto; padding: 16px 32px 0; color: var(--muted); font-size: 0.88rem; }
+    .share-top .brand { flex: none; font-size: 1rem; }
+    .share-top .grow { flex: 1; }
+    @media (max-width: 820px) { .share-top { padding: 12px 16px 0; } }
+  </style>
+</head>
+<body>
+  <div class="share-top">
+    <a class="brand" href="/"><img src="/icons/icon.svg" alt=""><span>Noter</span></a>
+    <span class="grow"></span>
+    <span>Read-only shared page</span>
+  </div>
+  <main class="page-body">
+    <h1 id="share-title" class="visually-hidden">Shared note</h1>
+    <div class="page-info" id="share-info"></div>
+    <article class="markdown" id="share-content"><p class="page-info">Loading…</p></article>
+  </main>
+  <script type="module" src="/js/share.js"></script>
+</body>
+</html>
