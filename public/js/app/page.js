@@ -64,6 +64,7 @@ export class PageView {
     this.version = null;
     this.exists = false;
     this.protected = false;
+    this.access = 'public';
     this.locked = false;
     this.deleted = false;
     this.mode = 'view';
@@ -120,7 +121,9 @@ export class PageView {
     this.protected = page.protected;
     this.updatedAt = page.updatedAt;
     this.updatedBy = page.updatedBy;
-    this.lockIcon.hidden = !page.protected;
+    // SVG elements have no .hidden property: toggle the attribute
+    this.lockIcon.toggleAttribute('hidden', !page.protected);
+    this.access = page.access || 'public';
     if (page.viewers) this.renderPresence(page.viewers);
   }
 
@@ -183,6 +186,15 @@ export class PageView {
   renderInfo() {
     if (!this.infoEl) return;
     const parts = [];
+    if (this.protected) {
+      parts.push(el('span', {
+        class: 'private-badge',
+        title: this.access === 'admin'
+          ? 'Other people need the password to open this page. You can open it because you are an admin.'
+          : 'Only people with the password can open this page.',
+        text: this.access === 'admin' ? '🔒 Private · open to you as admin' : '🔒 Private'
+      }), ' · ');
+    }
     if (!this.exists) parts.push('New page — it will be created when you start writing.');
     else if (this.updatedAt) {
       const edited = el('span', { title: formatDateTime(this.updatedAt), text: `Edited ${timeAgo(this.updatedAt)}` });
@@ -259,7 +271,7 @@ export class PageView {
     this.locked = true;
     this.modeToggle.hidden = true;
     this.menuButton.hidden = true;
-    this.lockIcon.hidden = false;
+    this.lockIcon.removeAttribute('hidden');
     this.presenceEl.replaceChildren();
     const input = el('input', { class: 'input', type: 'password', placeholder: 'Password', 'aria-label': 'Password', autocomplete: 'current-password' });
     const error = el('div', { class: 'form-error', role: 'alert', text: message || '' });

@@ -231,21 +231,31 @@ export async function showPrivacy(page, session) {
       submit: async v => post(`${pageUrl(name)}/password`, { password: v })
     });
     if (password !== undefined) {
-      toast('Page is now private');
+      toast(session.admin
+        ? 'Page is now private. Others need the password; as an admin you can still open it.'
+        : 'Page is now private. Others need the password to open it.', { duration: 6000 });
       await page.open(name);
       page.onChange();
     }
     return;
   }
 
+  // Admins can open every private page, so "lock on this device" would do
+  // nothing for them: say so instead of offering it.
+  const body = el('div', {}, [
+    el('p', { text: 'Other people need the password to see or edit this page, and it is hidden from their page list until they unlock it.' }),
+    session.admin
+      ? el('p', { text: 'You can always open it because you are an admin. To check what others see, sign in as a non-admin or open the page in a private browser window.' })
+      : el('p', { text: 'You can change or remove the password, or lock the page again on this device.' })
+  ]);
   const choice = await modal({
     title: `${name} is private`,
-    body: el('p', { text: 'People need the password to open this page. You can change or remove the password, or lock it again on this device.' }),
+    body,
     actions: [
       { label: 'Remove password', value: 'remove', danger: true },
-      { label: 'Lock on this device', value: 'lock' },
+      session.admin ? null : { label: 'Lock on this device', value: 'lock' },
       { label: 'Change password', value: 'change', primary: true }
-    ]
+    ].filter(Boolean)
   });
   if (choice === 'change') {
     const password = await promptDialog({

@@ -256,6 +256,8 @@ async function main() {
     await A.click('.lock-card button');
     await A.waitForSelector('#preview');
     check('private page unlocks with the right password', (await A.locator('#preview').textContent()).includes('Brody private notes'));
+    check('a private page shows the lock icon and a Private label',
+      (await A.isVisible('#page-lock-icon')) && (await A.locator('#page-info .private-badge').textContent()) === '🔒 Private');
     const listed = await waitFor(async () => (await A.locator('#page-list a[data-name="brody"]').count()) === 1);
     check('an unlocked private page appears in your sidebar', listed);
     check('…but not in other people\'s', await (async () => {
@@ -365,6 +367,37 @@ async function main() {
     await A.waitForSelector('dialog[open] pre:has-text("hello files")');
     check('file manager uploads and previews files', true);
     await A.keyboard.press('Escape');
+
+    // ---- Admin locks an existing page: others are locked out, admin is told why they aren't
+    const brodyEarly = await person('Brody', { username: 'brody' });
+    const Y = brodyEarly.page;
+    await Y.goto(BASE + '/person/beachlist');
+    await Y.waitForSelector('#preview');
+    await Y.click('#page-menu-btn');
+    await Y.click('.menu >> text=Make private');
+    await Y.fill('dialog[open] input[type=password]', 'beachpw1');
+    await Y.click('dialog[open] .btn.primary');
+    await Y.waitForSelector('#page-info .private-badge');
+    check('locking a page shows the lock icon and Private label right away',
+      (await Y.isVisible('#page-lock-icon')) && /^🔒 Private/.test(await Y.textContent('#page-info .private-badge')));
+    await B.goto(BASE + '/person/beachlist');
+    await B.waitForSelector('.lock-card');
+    check('…and other members get the password prompt', true);
+    await Y.click('#page-menu-btn');
+    await Y.click('.menu >> text=Password & privacy');
+    check('admins aren\'t offered "Lock on this device" (it wouldn\'t lock for them)',
+      (await Y.locator('dialog[open] >> text=Lock on this device').count()) === 0);
+    await Y.click('dialog[open] >> text=Remove password');
+    await Y.click('dialog[open] .btn.danger:has-text("Remove")');
+    await Y.waitForFunction(() => !document.querySelector('#page-info .private-badge'));
+    // A private page the admin never unlocked: readable, and it says why
+    await Y.goto(BASE + '/person/brody');
+    await Y.waitForSelector('#page-info .private-badge');
+    check('admins opening someone\'s private page are told it\'s "open to you as admin"',
+      (await Y.isVisible('#preview')) && /open to you as admin/.test(await Y.textContent('#page-info .private-badge')));
+    await brodyEarly.context.close();
+    await B.goto(BASE + '/person/beachlist');
+    await B.waitForSelector('#preview');
 
     // ---- Admin: backups and people
     await A.goto(BASE + '/');

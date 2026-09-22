@@ -287,6 +287,7 @@ label.field .input { margin-top: 4px; color: var(--text); }
 .page-body { max-width: 860px; margin: 0 auto; padding: 28px 32px 120px; }
 
 .page-info { color: var(--faint); font-size: 0.82rem; margin-bottom: 14px; }
+.private-badge { color: var(--text); font-weight: 600; }
 
 /* ---------- Editor ---------- */
 
